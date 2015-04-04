@@ -1,0 +1,30 @@
+router:
+	prefix: a string stands for `this Router instance's presix url`.
+		it is not a `regex` but string.
+	
+	any:url-func-dict:
+		[(url, func), ...]
+	get:url-func-dict:
+		pass
+	post:url-func-dict:
+		pass
+	other-method:url-func-dict:
+		pass
+    `no url matched in [get,post,...]`,then fallback on [any]
+
+    	function add(method="any", url, func):
+		 add (url, func) to [method] corresponding list.
+		 earlier added func has higher priority.
+
+	function del(method="any", url):
+		 just delete the tuple in [method] list
+		 !!! but [url] is regex,
+		 it's hard and some how useless to delete a url,func tuple.
+	function clear(method="all"):
+		 if method=="all":
+		    clear all (any, get, post ...) list into empty.
+		 else :
+		      just clear the [method] list.
+
+	function route(url, method="any"):
+		 decorator version of `add`
