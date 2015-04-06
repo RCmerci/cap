@@ -27,6 +27,10 @@ import threading, thread
 import cgi
 import pdb
 import cStringIO
+import functools
+
+############
+from utils import FormatUrl, FormatReUrl, FormatRePrefix
 
 class Cap(object):
     def __init__(self, router):
@@ -41,7 +45,10 @@ class Cap(object):
         ## a wsgi application can be called ,so define `__call__`.
         global request
         request.init(environ)
-        request.current_app_url = self._consume_prefix(request.current_app_url)
+        if is_debug:
+            pdb.set_trace()
+        request.current_app_url = request.current_app_url.consume_prefix(self.prefix)
+        # request.current_app_url = self._consume_prefix(request.current_app_url)
         func, matched_group = self.route(request.current_app_url, request.method)
 
         if isinstance(func, Cap):
@@ -64,12 +71,12 @@ class Cap(object):
         ### `http://www.example.com/wdd/w?e=3#www` -> `/wdd/w`
         ### `http://a.b.c` -> `/`
         ## return corresponding `function` and `matched group`
-        return self.router.search(path, method)
+        return self.router.search(str(path), method)
 
-    def _consume_prefix(self, url):
-        _url = url.lstrip("/")
-        _url = re.sub(self.prefix.strip("/"), "", _url)
-        return "/" + _url.lstrip("/")
+    # def _consume_prefix(self, url):
+    #     _url = url.lstrip("/")
+    #     _url = re.sub(self.prefix.strip("/"), "", _url)
+    #     return "/" + _url.lstrip("/")
 
     @property
     def prefix(self):
@@ -77,7 +84,8 @@ class Cap(object):
 
     def subapp(self, subcap):
         self.cap_stack.push(subcap)
-        tmp_prefix = "^" + subcap.router.prefix.replace("\\", "\\\\").rstrip("/") + "/.*"
+        ## add `/.*` to match __all__ possible case starting with this prefix.
+        tmp_prefix = "^" + subcap.router.prefix + "/.*"
         self.router.add(tmp_prefix, subcap)
 
 class Router(object):
@@ -87,15 +95,15 @@ class Router(object):
         
         self.router_instances.append(self) # add [self] to [router_instaces]
         
-        self.prefix = self._fix_prefix(prefix)
+        self.prefix = FormatRePrefix(prefix).val
         self.fallback = []
         self.get = []
         self.post = []
         self.head = []
         self.other = [] ### other http `method`s
 
-    def _fix_prefix(self, prefix):
-        return "/" + prefix.replace("\\", "\\\\").strip("/")
+    # def _fix_prefix(self, prefix):
+    #     return "/" + prefix.replace("\\", "\\\\").strip("/")
         
     def add(self, url, func, method="any"):
         method = "fallback" if method=="any" else method
@@ -126,11 +134,9 @@ class Router(object):
 
     def route(self, url, method="any"):
         def aux(func):
-            ### replace `\\` by `\\\\` .
-            ### promise users' input url can be raw string.
-            _url = "/" + url.strip("^$").lstrip("/")
-            _url = "^(" + _url.replace("\\", "\\\\") + ")$" 
-            self.add(_url, func, method) 
+            ### assume users' input url can be raw string.
+            _url = FormatReUrl(url).url
+            self.add(_url, func, method)
             return func
         return aux
 
@@ -144,7 +150,7 @@ class Router(object):
             matched = re.match(pathregex, path)
             if matched:
                 return func, matched
-        raise RuntimeError("no matched url-function for: "+path)
+        raise RuntimeError("no matched url-function for: %s"%request.path)
     
 class LocalProperty(object):
     def __init__(self):
@@ -243,7 +249,7 @@ class Request(object):
 
     @EnvDict(keyname="cap.path")
     def path(self):
-        return self.env.get("PATH_INFO").rstrip('/')
+        return FormatUrl(self.env.get("PATH_INFO"))
 
     # def full_path(self):
     #     return 
@@ -283,7 +289,7 @@ class Request(object):
 
     @EnvDict(keyname="_cap.current_app_url", readonly=False)
     def current_app_url(self):
-        return self.path
+        return FormatUrl(self.path)
     
 class Response(object):
     default_status = "200 OK"
@@ -298,7 +304,7 @@ class Response(object):
         self.status = kwargs.get("status", self.default_status)
         self.tp = kwargs.get("tp", self.default_tp)
         
-        self.header = []
+        self._header = []
         
     @property
     def _content_length(self):
@@ -306,19 +312,21 @@ class Response(object):
 
     @property
     def _content_type(self):
-        return ("Content-type", self.tp)
+        return ("Content-Type", self.tp)
 
-    # @property
-    # def header(self):
-    #     return self.header
+    @property
+    def header(self):
+        self.add_header(self._content_type)
+        self.add_header("Content-Length", self._content_length)
+        return self._header
 
     def add_header(self, *args):
         if len(args) == 1 and isinstance(args[0], (tuple, list)):
-            self.header.append(tuple(args[0]))
+            self._header.append(tuple(args[0]))
         elif len(args) == 2 and \
         isinstance(args[0], basestring) and \
         isinstance(args[1], basestring):
-            self.header.append(args)
+            self._header.append(args)
         else:
             warnings.warn("[add_header]:illegal parameters.")
             pass
@@ -360,7 +368,7 @@ class MediaRespnse(Response):
             "tp": tp,
             "status": self.default_status
         }
-        super(FileRespnse, self).__init__(init_dict)
+        super(MediaRespnse, self).__init__(**init_dict)
         
     
 class StaticFileResponse(Response):
@@ -376,7 +384,7 @@ class StaticFileResponse(Response):
             "body": retfile,
             "status": self.default_status
         }
-        super(StaticFileResponse, self).__init__(init_dict)
+        super(StaticFileResponse, self).__init__(**init_dict)
 
 
 class CapStack(object):
@@ -392,7 +400,7 @@ class CapStack(object):
             ### if length of cap_list(self._stack) > 1,
             ### we need to add a router cap instance to route `prefix` of each
             ### cap instance.
-            tmp_prefix = "^" + cap_ins.router.prefix.replace("\\", "\\\\").rstrip("/") + "/.*"
+            # tmp_prefix = "^" + cap_ins.router.prefix.replace("\\", "\\\\").rstrip("/") + "/.*"
             if not (self._router_app or CapStack._router_app_pushed):
                 CapStack._router_app_pushed = True # change flag value
                 app_router = Router()
@@ -421,6 +429,7 @@ class CapStack(object):
 
 def app_register(cap):
     ### register `cap` as toplevel app
+    global cap_stack
     cap_stack.push(cap)
     
 ####################################
@@ -430,9 +439,13 @@ request = Request()
 
 cap_stack = CapStack(is_root=True)
 
+is_debug = True
+
 #############################################
 
-def run(port, ip):
+def run(port, ip, debug=True):
+    global is_debug
+    is_debug = debug
     if cap_stack.has_router_app():
         app = cap_stack.router_app
     else:
