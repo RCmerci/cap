@@ -11,7 +11,7 @@ def test_f(*args):
 mainrouter = cap.Router(r"main")
 mainapp = cap.Cap(mainrouter)
 cap.app_register(mainapp)
-@mainrouter.route(r"/index/(\w*)")
+@mainrouter.route(r"/index/")
 def index(*args):
     return cap.Response(body="<h1>INdEx</h1><p>args:%s</p>"%str(args))
 

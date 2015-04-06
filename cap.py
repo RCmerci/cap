@@ -354,13 +354,14 @@ class Response(object):
             self._body.close()
     @body.setter
     def body(self, val):
-        pdb.set_trace()
         if isinstance(val, file):
             self._body = self.FileBodyWrapper(val)
         elif hasattr(val, "read") and hasattr(val, "__len__") and hasattr(val, "seek"):
             self._body = val
         elif isinstance(val, basestring):
             self._body = self.StrBodyWrapper(val)
+        elif isinstance(val, cStringIO.OutputType):
+            self._body = self.StrBodyWrapper(val.getvalue())
         else:
             raise NotImplementedError
 
@@ -477,7 +478,6 @@ def _register_static_app():
     app_register(static_app)
     @static_router.route(r"(.*)")
     def static_func(path):
-        pdb.set_trace()
         path = path.strip(" /")
         if is_debug:
             print "query static file: %s, at static root: %s"%(path, static_root)
