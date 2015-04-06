@@ -21,4 +21,4 @@ def download():
     f = open("/Users/rcmerci/Desktop/屏幕快照 2015-03-03 下午2.04.14.png","rb")
     size = os.stat("/Users/rcmerci/Desktop/屏幕快照 2015-03-03 下午2.04.14.png").st_size
     return cap.MediaRespnse(f.read(size))
-cap.run(8080, "127.0.0.1",False)
+cap.run(8080, "127.0.0.1")

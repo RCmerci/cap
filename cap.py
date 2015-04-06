@@ -2,24 +2,6 @@
 from wsgiref.util import setup_testing_defaults
 from wsgiref.simple_server import make_server
 
-# # A relatively simple WSGI application. It's going to print out the
-# # environment dictionary after being updated by setup_testing_defaults
-# def simple_app(environ, start_response):
-#     setup_testing_defaults(environ)
-
-#     status = '200 OK'
-#     headers = [('Content-type', 'text/plain')]
-
-#     start_response(status, headers)
-
-#     ret = ["%s: %s\n" % (key, value)
-#            for key, value in environ.iteritems()]
-#     return ret
-
-# httpd = make_server('', 8080, simple_app)
-# print "Serving on port 8080..."
-# httpd.serve_forever()
-
 import re
 import warnings
 import functools
@@ -28,6 +10,9 @@ import cgi
 import pdb
 import cStringIO
 import functools
+import os
+import traceback
+import sys
 
 ############
 from utils import FormatUrl, FormatReUrl, FormatRePrefix
@@ -45,27 +30,31 @@ class Cap(object):
         ## a wsgi application can be called ,so define `__call__`.
         global request
         request.init(environ)
-        if is_debug:
-            pdb.set_trace()
         request.current_app_url = request.current_app_url.consume_prefix(self.prefix)
-        # request.current_app_url = self._consume_prefix(request.current_app_url)
-        func, matched_group = self.route(request.current_app_url, request.method)
+        try:
+            func, matched_group = self.route(request.current_app_url, request.method)
+        except RuntimeError:
+            return self.do_response(start_response, ErrorResponse(404))
 
         if isinstance(func, Cap):
             return func(environ, start_response)
-        
-        response = func(*matched_group.groups())
-        
+        try:
+            response = func(*matched_group.groups())
+        except:
+            tmp_buff = cStringIO.StringIO()
+            traceback.print_tb(sys.exc_info()[2], file=tmp_buff)
+            response = ErrorResponse(500, body=tmp_buff)
         ### `response` must be instance of [Response]
         assert(isinstance(response, Response))
 
-        start_response(response.status, response.header)
+        return self.do_response(start_response, response)
 
+    def do_response(self, start_response, response):
+        start_response(response.status, response.header)
         if request.method == "head":
             return []
-        
         return [response.body]
-        
+
     def route(self, path, method):
         ### [path] is url‘s `PATH_INFO`
         ### `http://www.example.com/wdd/w?e=3#www` -> `/wdd/w`
@@ -134,7 +123,7 @@ class Router(object):
 
     def route(self, url, method="any"):
         def aux(func):
-            ### assume users' input url can be raw string.
+            ### assume users' input url is raw string.
             _url = FormatReUrl(url).url
             self.add(_url, func, method)
             return func
@@ -290,9 +279,11 @@ class Request(object):
     @EnvDict(keyname="_cap.current_app_url", readonly=False)
     def current_app_url(self):
         return FormatUrl(self.path)
+
+from utils import status_dict
     
 class Response(object):
-    default_status = "200 OK"
+    default_status = "200"
     default_tp = "text/html; charset=UTF-8"
     
     # def __init__(self, status, body, tp=None):
@@ -302,6 +293,7 @@ class Response(object):
         
         self.body = kwargs.get("body", "")
         self.status = kwargs.get("status", self.default_status)
+        self.status = str(self.status) + " " + status_dict.get(int(self.status), "")
         self.tp = kwargs.get("tp", self.default_tp)
         
         self._header = []
@@ -316,8 +308,6 @@ class Response(object):
 
     @property
     def header(self):
-        self.add_header(self._content_type)
-        self.add_header("Content-Length", self._content_length)
         return self._header
 
     def add_header(self, *args):
@@ -340,28 +330,44 @@ class Response(object):
         self._body.seek(0)
         return self._body.read(self._content_length)
 
-    class BodyWrapper(object):
-        def __init__(self, str_body):
-            self._len = len(str_body)
-            self._body = cStringIO.StringIO(str_body)
+    class StrBodyWrapper(object):
+        def __init__(self, body):
+            self._len = len(body)
+            self._body = cStringIO.StringIO(body)
         def seek(self, *args, **kwargs):
             return self._body.seek(*args, **kwargs)
         def read(self, *args, **kwargs):
             return self._body.read(*args, **kwargs)
         def __len__(self):
             return self._len
-            
+    class FileBodyWrapper(object):
+        def __init__(self, body):
+            self._len = os.stat(body.name).st_size
+            self._body = body
+        def seek(self, *args, **kwargs):
+            return self._body.seek(*args, **kwargs)
+        def read(self, *args, **kwargs):
+            return self._body.read(*args, **kwargs)
+        def __len__(self):
+            return self._len
+        def __del__(self):
+            self._body.close()
     @body.setter
     def body(self, val):
-        if hasattr(val, "read") and hasattr(val, "__len__"):
+        pdb.set_trace()
+        if isinstance(val, file):
+            self._body = self.FileBodyWrapper(val)
+        elif hasattr(val, "read") and hasattr(val, "__len__") and hasattr(val, "seek"):
             self._body = val
         elif isinstance(val, basestring):
-            self._body = self.BodyWrapper(val)
+            self._body = self.StrBodyWrapper(val)
         else:
             raise NotImplementedError
 
 class MediaRespnse(Response):
     def __init__(self, retfile, **kwargs):
+        if isinstance(retfile, basestring):
+            retfile = open(retfile, "rb")
         tp = kwargs.get("tp", "application/octet-stream")
         init_dict = {
             "body": retfile,
@@ -370,9 +376,17 @@ class MediaRespnse(Response):
         }
         super(MediaRespnse, self).__init__(**init_dict)
         
+    @property
+    def header(self):
+        self.add_header(self._content_type)
+        self.add_header("Content-Length", self._content_length)
+        return self._header
+
     
 class StaticFileResponse(Response):
     def __init__(self, retfile, **kwargs):
+        if isinstance(retfile, basestring):
+            retfile = open(retfile, "rb")
         if kwargs.has_key("tp"):
             tp = kwargs["tp"]
         elif hasattr(retfile, "tp"):
@@ -386,6 +400,20 @@ class StaticFileResponse(Response):
         }
         super(StaticFileResponse, self).__init__(**init_dict)
 
+    @property
+    def header(self):
+        self.add_header(self._content_type)
+        self.add_header("Content-Length", self._content_length)
+        return self._header
+
+
+class ErrorResponse(Response):
+    def __init__(self, status, **kwargs):
+        init_dict = {
+            "status": status,
+            "body": kwargs.get("body", str(status))
+        }
+        super(ErrorResponse, self).__init__(**init_dict)
 
 class CapStack(object):
     _router_app_pushed = False
@@ -400,17 +428,14 @@ class CapStack(object):
             ### if length of cap_list(self._stack) > 1,
             ### we need to add a router cap instance to route `prefix` of each
             ### cap instance.
-            # tmp_prefix = "^" + cap_ins.router.prefix.replace("\\", "\\\\").rstrip("/") + "/.*"
             if not (self._router_app or CapStack._router_app_pushed):
                 CapStack._router_app_pushed = True # change flag value
                 app_router = Router()
-                # app_router.add(tmp_prefix, cap_ins)
                 self._router_app = Cap(app_router)
                 self._router_app.subapp(cap_ins)
                 self._router_app.subapp(self._stack[0])
             else:
                 self._router_app.subapp(cap_ins)
-                # self._router_app.router.add(tmp_prefix, cap_ins)
 
                 
     def pop(self):
@@ -426,7 +451,7 @@ class CapStack(object):
     def __getitem__(self, ind):
         return self._stack[ind]
 
-
+    
 def app_register(cap):
     ### register `cap` as toplevel app
     global cap_stack
@@ -441,11 +466,33 @@ cap_stack = CapStack(is_root=True)
 
 is_debug = True
 
+static_url = r"/static"
+
+static_root = r"./static/"
+######################################
+######### init #######################
+def _register_static_app():
+    static_router = Router(static_url)
+    static_app = Cap(static_router)
+    app_register(static_app)
+    @static_router.route(r"(.*)")
+    def static_func(path):
+        pdb.set_trace()
+        path = path.strip(" /")
+        if is_debug:
+            print "query static file: %s, at static root: %s"%(path, static_root)
+        try:
+            return StaticFileResponse(os.path.join(static_root, path))
+        except IOError:
+            return ErrorResponse(404)
+
 #############################################
 
 def run(port, ip, debug=True):
     global is_debug
     is_debug = debug
+    ### add static handler
+    _register_static_app()
     if cap_stack.has_router_app():
         app = cap_stack.router_app
     else:
