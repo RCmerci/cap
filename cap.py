@@ -15,7 +15,7 @@ import traceback
 import sys
 
 ############
-from utils import FormatUrl, FormatReUrl, FormatRePrefix
+from utils import FormatUrl, FormatReUrl, FormatRePrefix, FileWrapper
 
 class Cap(object):
     def __init__(self, router):
@@ -38,12 +38,13 @@ class Cap(object):
 
         if isinstance(func, Cap):
             return func(environ, start_response)
-        try:
-            response = func(*matched_group.groups())
-        except:
-            tmp_buff = cStringIO.StringIO()
-            traceback.print_tb(sys.exc_info()[2], file=tmp_buff)
-            response = ErrorResponse(500, body=tmp_buff)
+        # try:
+        #     response = func(*matched_group.groups())
+        # except:
+        #     tmp_buff = cStringIO.StringIO()
+        #     traceback.print_tb(sys.exc_info()[2], file=tmp_buff)
+        #     response = ErrorResponse(500, body=tmp_buff)
+        response = func(*matched_group.groups())
         ### `response` must be instance of [Response]
         assert(isinstance(response, Response))
 
@@ -74,7 +75,7 @@ class Cap(object):
     def subapp(self, subcap):
         self.cap_stack.push(subcap)
         ## add `/.*` to match __all__ possible case starting with this prefix.
-        tmp_prefix = "^" + subcap.router.prefix + "/.*"
+        tmp_prefix = "^" + subcap.router.prefix + "(?:/.)*"
         self.router.add(tmp_prefix, subcap)
 
 class Router(object):
@@ -124,21 +125,35 @@ class Router(object):
     def route(self, url, method="any"):
         def aux(func):
             ### assume users' input url is raw string.
-            _url = FormatReUrl(url).url
+            _url = "(?:%s)$"%FormatReUrl(url).url 
             self.add(_url, func, method)
             return func
         return aux
 
     def search(self, path, method):
         ### return corrsponding function and matched group (re)
+        ### 逻辑如下：
+        ### 1. 如果有符合的回调函数， 直接返回
+        ### 2. 如果有符合的子Cap实例， 存入 [cap_res]，继续搜索
+        ### 3. 如果没找到符合的， 有[cap_res] 则返回， 没有则raise 错误。
+        ### 4. 就是这样！
+        cap_res = None
         for pathregex, func in getattr(self, method.lower()):
             matched = re.match(pathregex, path)
+            if matched and isinstance(func, Cap):
+                cap_res = (func, matched)
+                continue
             if matched:
                 return func, matched
         for pathregex, func in getattr(self, "fallback"):
             matched = re.match(pathregex, path)
+            if matched and isinstance(func, Cap) and not cap_res:
+                cap_res = (func, matched)
+                continue
             if matched:
                 return func, matched
+        if cap_res:
+            return cap_res    
         raise RuntimeError("no matched url-function for: %s"%request.path)
     
 class LocalProperty(object):
@@ -160,7 +175,7 @@ def str2dict(string, delimiter="&", key_val_delimiter="="):
     def space_filter(s):
         return s.strip()
     res_dict = {}
-    key_val_l = filter(space_filter, string.spilt(delimiter))
+    key_val_l = filter(space_filter, string.split(delimiter))
     for kv in key_val_l:
         kv = map(space_filter, kv.split(key_val_delimiter))
         if len(kv) == 2:
@@ -240,6 +255,11 @@ class Request(object):
     def path(self):
         return FormatUrl(self.env.get("PATH_INFO"))
 
+    @EnvDict(keyname="cap.content_length")
+    def content_length(self):
+        length = self.env.get("CONTENT_LENGTH", "")
+        return int(length if length else 0)
+    
     # def full_path(self):
     #     return 
     @EnvDict(keyname="cap.query_string")
@@ -254,26 +274,43 @@ class Request(object):
 
     @EnvDict(keyname="cap.body")
     def body(self):
-        length = int(self.env.get("CONTENT_LENGTH", 0))
+        length = self.content_length
         if length and self.env.has_key("wsgi.input"):
             return self.env["wsgi.input"].read(length)
         return ""
 
     @EnvDict(keyname="cap.POST")
     def POST(self):
+        def parse_header(header):
+            if not header.has_key("content-disposition"):
+                return {}
+            content_disposition = str2dict(header["content-disposition"], delimiter=";")
+            res = {}
+            for k, v in content_disposition.items():
+                if v <> "":
+                    res[k] = v.strip("\"\'") if v[0]==v[-1] and v[0] in "\'\"" else v
+            header.update(res)
+            return header
         env_args = {}
-        env_keys = ("CONTENT_TYPE", "CONETNT_LENGTH", "REQUEST_METHOD")
+        env_keys = ("CONTENT_TYPE", "CONTENT_LENGTH", "REQUEST_METHOD")
         for k in env_keys:
-            env_args[k] = self.environ.get(k, "")
+            if k == "CONTENT_LENGTH":
+                env_args[k] = str(self.content_length)
+                continue
+            env_args[k] = self.env.get(k, "")
 
         args = {}
         res = {}
-        args["fp"] = self.body
-        args["envrion"] = env_args
+        args["fp"] = cStringIO.StringIO(self.body)
+        args["environ"] = env_args
         args["keep_blank_values"] = True
         fs = cgi.FieldStorage(**args)
+        fs = fs.list
         for k in fs:
-            res[k] = fs[k]
+            if k.filename:
+                res[k.name] = FileWrapper(k.file, **parse_header(dict(k.headers)))
+                continue
+            res[k.name] = k.value
         return res
 
     @EnvDict(keyname="_cap.current_app_url", readonly=False)
@@ -422,23 +459,19 @@ class CapStack(object):
         self._stack = []
         self._router_app = None
         self.is_root = is_root
+        if self.is_root:
+            self._build_root_app()
 
     def push(self, cap_ins):
         self._stack.append(cap_ins)
-        if len(self._stack) > 1 and self.is_root:
-            ### if length of cap_list(self._stack) > 1,
-            ### we need to add a router cap instance to route `prefix` of each
-            ### cap instance.
-            if not (self._router_app or CapStack._router_app_pushed):
-                CapStack._router_app_pushed = True # change flag value
-                app_router = Router()
-                self._router_app = Cap(app_router)
-                self._router_app.subapp(cap_ins)
-                self._router_app.subapp(self._stack[0])
-            else:
-                self._router_app.subapp(cap_ins)
+        if self.is_root:
+            ### add [cap_ins] to [root_app]
+            self._router_app.subapp(cap_ins)
 
-                
+    def _build_root_app(self):
+        router = Router()
+        self._router_app = Cap(router)
+    
     def pop(self):
         raise NotImplementedError
 
@@ -465,6 +498,8 @@ request = Request()
 
 cap_stack = CapStack(is_root=True)
 
+root = cap_stack.router_app.router
+
 is_debug = True
 
 static_url = r"/static"
@@ -486,6 +521,7 @@ def _register_static_app():
         except IOError:
             return ErrorResponse(404)
 
+    
 #############################################
 
 def run(port, ip, debug=True):

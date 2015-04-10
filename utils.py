@@ -1,4 +1,7 @@
 import re
+import cStringIO
+import functools
+import pdb
 
 class FormatReUrl(object):
     ### [url] is regex , [prefix] is normal string.
@@ -174,8 +177,6 @@ if __name__ == "__main__":
     assert(ee.consume_prefix(r"\w\w\w").url == r"/.a./bb/ccc")
     assert(ff.consume_prefix(r"\\aa/bb").url == r"/cc-")
     assert(gg.consume_prefix(r"\a").url == r"/b/c")
-    print r"test success"
-    pass
 
 
 ###########################################################################
@@ -244,6 +245,82 @@ status_dict = {
     508: "Loop Detected",
     510: "Not Extended",
     511: "Network Authentication Required",
-    
-    
 }
+
+
+def calculate_once(func):
+    @functools.wraps(func)
+    def aux(obj, *args, **kwargs):
+        res = func(obj, *args, **kwargs)
+        obj.__dict__[func.__name__] = lambda *args, **kwargs: res
+        return res
+    return aux
+    
+
+class FileWrapper(object):
+    """
+    trans [obj] to a `file-like` obj
+    """
+    def __init__(self, obj, **headers):
+        self._original_obj = obj
+        self._headers = headers
+        self._obj = self._normalize()
+        for k, v in headers.items():
+            if (not k in dir(self)) and\
+               (not k in self.__dict__):
+                setattr(self, k, v)
+
+    def read(self, *args, **kwargs):
+        return self._obj.read(*args, **kwargs)
+    def readline(self, *args, **kwargs):
+        return self._obj.readline(*args, **kwargs)
+    def readlines(self, *args, **kwargs):
+        return self._obj.readlines(*args, **kwargs)
+    def seek(self, *args, **kwargs):
+        return self._obj.seek(*args, **kwargs)
+    
+    @calculate_once
+    def _filename(self):
+        keys = self._headers.keys()
+        if "filename" in keys:
+            return self._headers.get("filename", None)
+        if "name" in keys:
+            return self._headers.get("name", None)
+        if hasattr(self._obj, "filename"):
+            return self._obj.filename
+        if hasattr(self._obj, "name"):
+            return self._obj.name
+        return None
+    
+    def _normalize(self):
+        required_method = ["read", "seek", "readline", "readlines"]
+        flag = True
+        for m in required_method:
+            if not hasattr(self._original_obj, m):
+                flag = False
+                break
+        if flag:
+            return self._original_obj
+        if isinstance(self._original_obj, basestring):
+            return  cStringIO.StringIO(self._original_obj)
+        raise NotImplementedError("[FileWrapper]")
+
+    def __repr__(self):
+        return "FileWrapper: " + self.filename
+
+    @property
+    def filename(self):
+        return self._filename()
+
+if __name__ == "__main__":
+    f = FileWrapper("tetsttetuuisdiudfoah", name="test", tt = 77)
+    assert(f.read(5) == "tetst")
+    f.seek(0)
+    assert(f.readline() == "tetsttetuuisdiudfoah")
+    f.seek(0)
+    assert(f.readlines() == ["tetsttetuuisdiudfoah"])
+    f.seek(0)
+    assert(f.name == "test")
+    assert(f.tt == 77)
+    assert(f.filename == "test")
+    assert(f.filename == "test")
