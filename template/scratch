@@ -1,0 +1,70 @@
+主要类：Template，
+传1个参数： html文件路径，这个文件是未处理过的（类似django，里面到处`{{}}`之类的东西）
+
+class Template:
+      def render : 传随意键值对，值可以是字典。返回 修改完的html的（字符串？还是StringIO之类的？）
+      def __str__    : 不解释
+      
+
+模版（引擎？）的大概想法是：
+	语法：
+		1. 用 `++>`来标记开始， `<++`结束
+		2. 语法尽量跟python相似
+		3. 不能定义函数，（可以当参数传进去）。。。
+		4. 有内建函数 用"!"开头， 如"!XXX"
+		5. 有些内建函数parse前执行， 如!insert
+	内建函数：
+		1. insert(html, to, part_name):
+			插入 html 到 to 的part 部分
+		2. provide(part_name)
+			配合 insert， 在被插入的html留下坑，part_name是坑名，对应insert的
+			参数 part_name.
+		3. append(str):
+			str加到html中
+
+	其他：
+		1. insert 语法：
+		   	  ++>insert(html,to, part)<++
+			  HTML_BODY
+			  ++>end_insert()<++
+	
+example:
+------------------
+Template("xxx.html").render(k1="title", k2="body", k3={"k4":"others", "k5":None})
+------------------
+ <title>
+ ++> k1 <++
+ </title>
+ <body>++> k2 <++</body>
+ <others>++> k3["k4"]<++</others>
+ <nnn>
+  ++>
+ if k3["k5"]:
+     !append("Yes")
+ else:
+     !append("No")
+ <++
+ </nnn>
+ -------------------------------
+ output:
+ <title>
+ title
+ </title>
+ <body> body </body>
+ <others> others </others>
+ <nnn>
+ No	
+ </nnn>
+
+
+
+
+------------------------------
+parse部分
+－－－－－－－－－－－－－－－－－－
+|          | "        | ++>      | <++     | others   | '        |
+| html     | html     | template | html    | html     | html     |
+| template | dstring  | error    | html    | template | sstring  |
+| dstring  | template | dstring  | dstring | dstring  | dstring  |
+| sstring  | sstring  | sstring  | sstring | sstring  | template |
+
