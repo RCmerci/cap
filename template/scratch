@@ -11,11 +11,11 @@ class Template:
 		1. 用 `++>`来标记开始， `<++`结束
 		2. 语法尽量跟python相似
 		3. 不能定义函数，（可以当参数传进去）。。。
-		4. 有内建函数 用"!"开头， 如"!XXX"
+		4. 有内建函数 用"!"开头， 如"!XXX"  ;;;; 这条不要了， 都不用加“！”
 		5. 有些内建函数parse前执行， 如!insert
 	内建函数：
-		1. insert(html, to, part_name):
-			插入 html 到 to 的part 部分
+		1. insert(to, part_name):
+			插入到 to 的part 部分
 		2. provide(part_name)
 			配合 insert， 在被插入的html留下坑，part_name是坑名，对应insert的
 			参数 part_name.
@@ -24,7 +24,7 @@ class Template:
 
 	其他：
 		1. insert 语法：
-		   	  ++>insert(html,to, part)<++
+		   	  ++>insert(to, part)<++
 			  HTML_BODY
 			  ++>end_insert()<++
 	
@@ -67,4 +67,37 @@ parse部分
 | template | dstring  | error    | html    | template | sstring  |
 | dstring  | template | dstring  | dstring | dstring  | dstring  |
 | sstring  | sstring  | sstring  | sstring | sstring  | template |
+
+
+
+-----------------------------
+template.render 返回 一个 FinalHTMLpage 实例。
+class HtmlPage:
+      origin : 最初的preparse返回结果
+      ir: 中间处理的表示o
+      base: 父 htmlpage 实例
+      sub: 子 htmlpage 实例
+      provide_place: ++>provide("insert_hole")<++,这类的语句加到这里。这是个 列表。
+      insert_place : ++>insert()<++ ,内部元素 是 列表，代表这个 insert处的内容
+
+      def insert__InsertName():
+      	  pass
+      def scan: 扫一遍 preparse 输出的列表。
+      	  	1. insert  => base的值， 一个htmlpage只有一个base
+		2. provide => 参数加到 provide_place 里面
+		3. 普通 html => 加到最后的insert_place元素里。
+		4. 其他 语句 => compile一下，加到最后insert_place元素（之后 exec 之。)
+		5. 好像没了把 － －
+	        －－－－－－－－－－－－－－－－－－－－
+		
+      
+class FinalHtmlPage(HtmlPage):
+      render: 最后html的字符串，父类没有这个方法。父类都是些base.html之类的html页面，
+	      不会直接作为最后结果的那种html。
+
+      
+
+      
+
+
 
