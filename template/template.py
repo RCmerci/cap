@@ -2,15 +2,18 @@
 import re, os, copy
 from cStringIO import StringIO
 
+
 class Template(object):
-    def __init__(self, path):
+    def __init__(self, path, **env):
         self._path = path
         if not os.path.exists(path):
             raise IOError(path + "not exists")
         self.htmlfile = open(path, "rb")
+        self.env = env
     def render(self, **kwargs):
-        pass
-
+        if not hasattr(self, "htmlpage_cache"):
+            self.htmlpage_cache = HtmlPage(origin=preparse(self.htmlfile), name=self._path, **self.env)
+        return self.htmlpage_cache.result(**kwargs)
 
 # def insert(html, to, part_name):
 #     pass
@@ -181,7 +184,6 @@ class HtmlPage(object):
                 elif tp == "end_insert":
                     raise RuntimeError(u"应该没有end_insert类型了呀")
                 elif tp == "provide":
-                    pdb.set_trace()
                     provided_name = self._provided_name(string)
                     if self.insert_place.has_key(provided_name):
                         insert_pair = self.insert_place[provided_name]
@@ -193,18 +195,18 @@ class HtmlPage(object):
                     self.res.append(stat)
         else:                   # no self.base
             self.res = copy.copy(self.ir)
-        pdb.set_trace()
         return self.res
-    def result(self):           # 对 普通 语句 求值
+    def result(self, **env):           # 对 普通 语句 求值
+        self.env = env
         ires = []
-        res = cStringIO.StringIO()
+        res = StringIO()
         if not hasattr(self, "res"):
             self.res = self.render()
         for stat in self.res:
             tp, string = self.identify(stat.getvalue())
             if tp == "normal":
                 evalres = self.do_normal(string)
-                ires.append(cStringIO.StringIO(evalres))
+                ires.append(StringIO(evalres))
             else:
                 ires.append(stat)
         for i in ires:
@@ -242,7 +244,6 @@ class HtmlPage(object):
         else:                   # html
             return "html", string.strip()
     def _find_end_insert(self, start_index): # find the `end_insert()` tag
-        pdb.set_trace()
         for index, string in enumerate(self.ir[start_index:]):
             string = string.getvalue()
             if string.startswith("++>") and string.endswith("<++")\
@@ -367,4 +368,4 @@ if __name__ == "__main__":
     t3 = HtmlPage(origin=preparse(cStringIO.StringIO(test3)), name="test3")
     t4 = HtmlPage(origin=preparse(cStringIO.StringIO(test4)), name="test4")
     t4.render()
-    pdb.set_trace()
+    
