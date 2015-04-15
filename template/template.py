@@ -1,30 +1,35 @@
 #coding:utf-8#
-import re, os
+import re, os, copy
 from cStringIO import StringIO
 
 class Template(object):
-    pass
+    def __init__(self, path):
+        self._path = path
+        if not os.path.exists(path):
+            raise IOError(path + "not exists")
+        self.htmlfile = open(path, "rb")
+    def render(self, **kwargs):
+        pass
 
 
+# def insert(html, to, part_name):
+#     pass
 
-def insert(html, to, part_name):
-    pass
+# def end_insert():
+#     pass
 
-def end_insert():
-    pass
+# def provide(part_name):
+#     pass
 
-def provide(part_name):
-    pass
-
-def append(string):             # unused
-    pass
+# def append(string):             # unused
+#     pass
 
 class Appender(object):
     def __init__(self):
         self._content = []
     def __call__(self, string):
         self._content.append(str(string))
-    def __exit__(self):
+    def get_value(self):
         return "".join(self._content)
 
 ParseError = -1
@@ -144,7 +149,6 @@ def preparse(html_iter):           # html_iter is StringIO instance
                 current_template.write(char)
             else:
                 raise RuntimeError("impossible case")
-    pdb.set_trace()
     return template_stack
 
 
@@ -156,33 +160,81 @@ class HtmlPage(object):
         self.base = None
         self.sub = None         # 好像没有用
         self.origin = origin
-        self.ir = origin
+        # self.ir = copy.copy(origin)
         self.insert_place = {}
         self.provide_place = []
         self.name = name
         HtmlPage.Instances.update({self.name: self}) # add self to class level val
         ######### init followed
-        self.scan()
         self.env = kwargs
+        # self.scan()
+
+    def render(self):           # 拼凑 html， 但不对 普通 语句求值
+        self.res = []
+        self.scan()
+        if self.base:
+            self.base.render()
+            for stat in self.base.res:
+                tp, string = self.identify(stat.getvalue())
+                if tp == "insert":
+                    raise RuntimeError(u"应该没有insert类型了呀")
+                elif tp == "end_insert":
+                    raise RuntimeError(u"应该没有end_insert类型了呀")
+                elif tp == "provide":
+                    pdb.set_trace()
+                    provided_name = self._provided_name(string)
+                    if self.insert_place.has_key(provided_name):
+                        insert_pair = self.insert_place[provided_name]
+                        self.res.extend(copy.copy(self.ir[insert_pair[0]+1 : insert_pair[1]]))
+                elif tp == "normal":
+                    # raise RuntimeError(u"应该没有normal类型了呀")
+                    self.res.append(stat)
+                else:           # html
+                    self.res.append(stat)
+        else:                   # no self.base
+            self.res = copy.copy(self.ir)
+        pdb.set_trace()
+        return self.res
+    def result(self):           # 对 普通 语句 求值
+        ires = []
+        res = cStringIO.StringIO()
+        if not hasattr(self, "res"):
+            self.res = self.render()
+        for stat in self.res:
+            tp, string = self.identify(stat.getvalue())
+            if tp == "normal":
+                evalres = self.do_normal(string)
+                ires.append(cStringIO.StringIO(evalres))
+            else:
+                ires.append(stat)
+        for i in ires:
+            res.write(i.getvalue())
+        return res
     def scan(self):
+        self.ir = copy.copy(self.origin)
         for index, stat in enumerate(self.ir):
-            tp, string = self.identify(stat)
+            tp, string = self.identify(stat.getvalue())
             if tp == "insert":
                 end_index = self._find_end_insert(index + 1)
                 self.do_insert(string, index, end_index)
-            elif tp == "provide":
-                self.do_provide(string)
-            elif tp == "normal":
-
-                
-            else:               # html 
+            elif tp == "end_insert":
                 pass
-        pass
+            elif tp == "provide":
+                self.do_provide(string, index)
+            elif tp == "normal":                         # 对一般的模版的语句不应该
+                # ret = self.do_normal(string)             # 在scan的时候执行，应该
+                # self.ir[index] = cStringIO.StringIO(ret) # 在尽量晚的时候执行。
+                # pass                                     # 比如 [self.result]里。
+                pass                                      #所以这里只是不改变。
+            else:               # html ,just keep
+                pass
     def identify(self, string):
         if string.startswith("++>") and string.endswith("<++"):
             string = string[3:-3].strip()
             if string.startswith("insert"): # insert
                 return "insert", string
+            if string.startswith("end_insert"):
+                return "end_insert", string    
             if string.startswith("provide"): # provide
                 return "provide", string
             else:               # other type statements
@@ -190,11 +242,13 @@ class HtmlPage(object):
         else:                   # html
             return "html", string.strip()
     def _find_end_insert(self, start_index): # find the `end_insert()` tag
+        pdb.set_trace()
         for index, string in enumerate(self.ir[start_index:]):
-            if string.startswith("++>") and string.endswith("<++")\ # match `++>`and`<++`
-               and string[3:-3].strip().startswith("end_insert")\ # match `end_insert`
+            string = string.getvalue()
+            if string.startswith("++>") and string.endswith("<++")\
+               and string[3:-3].strip().startswith("end_insert")\
                and string[3:-3].strip()[len("end_insert"):].strip()[0]=="(": # match  `(`
-                return index
+                return index+start_index
         raise SyntaxError("template SyntaxError: not found matched insert-->end_insert pair")
 
     def do_insert(self, string, start_index, end_index):
@@ -204,8 +258,8 @@ class HtmlPage(object):
         """
         assert(string.startswith("insert"))
         def insert(to, part):
-            if not (HtmlPage.Instances.has_key(to)\ # not in HtmlPage.Instances
-                    or os.path.exists(to)):         #  this file not exists
+            if not (HtmlPage.Instances.has_key(to)\
+                    or os.path.exists(to)):         #  # not in HtmlPage.Instancesor this file not exists
                 raise RuntimeError("not exists:" + to)
             if HtmlPage.Instances.has_key(to):
                 self.base = HtmlPage.Instances[to]
@@ -216,47 +270,71 @@ class HtmlPage(object):
                     self.base = base
             self.insert_place.update({part: (start_index, end_index)})
         code_obj = compile(string, "template-compile", "exec")
-        exec code_obj           # exec `insert("xxx.html", "footer")`
-    def do_provide(self, string):
+        # exec `insert("xxx.html", "footer")`
+        exec code_obj in locals()
+    def _provided_name(self, string):
+        """
+        return the provided name:
+        provide("xxx") -> xxx
+        """
+        ret = []
+        def provide(part):
+            ret.append(str(part))
+        code_obj = compile(string, "template-compile", "exec")
+        exec code_obj in {"provide": provide}
+        if len(ret) == 1:
+            return ret[0]
+        raise LookupError("[_provide_name] failed")
+    def do_provide(self, string, index):
         """
         for `provide` statement,
         set `self.provide_place`
         """
         assert(string.startswith("provide"))
         def provide(part):
-            self.provide_place.append(part)
+            self.provide_place.append((part, index))
         code_obj = compile(string, "template-compile", "exec")
-        exec code_obj           # exec `provide("footer")`
+        # exec `provide("footer")`
+        exec code_obj in locals()
     def do_normal(self, string):
         """
         for `other normal template statements`,
         execute them.
         """
+        _append = Appender()
+        def append(string):
+            _append(string)
         code_obj = compile(string, "template-compile", "exec")
-        exec code_obj in self.env
+        env = self.env.copy()
+        env.update({"append":append})
+        exec code_obj in env # exec other normal template statements in environ `self.env`
+        return _append.get_value() # 返回 这个 块 生成的html
     @property
     def env(self):
-        if self._env:
+        if hasattr(self, "_env"):
             return self._env
         else:
             return None
     @env.setter
     def env(self, v):
-        self._env.update(v)
+        if hasattr(self, "_env"):
+            self._env.update(v)
+        else:
+            self._env = dict(v)
         return self._env
         
-class FinalHtmlPage(HtmlPage):
-    def __init__(self, origin, **kwargs):
-        super(FinalHtmlPage, self).__init__(origin, **kwargs)
+# class FinalHtmlPage(HtmlPage):  # 貌似不用子类了。。。
+#     def __init__(self, origin, **kwargs):
+#         super(FinalHtmlPage, self).__init__(origin, **kwargs)
 
-    def render(self):
-        pass
+#     def render(self):
+#         pass
     
-def parse(template_stack):
-    base = None
-    for stat in template_stack:
-        if stat.startswith("++>") and 
-    pass
+# def parse(template_stack):
+    # base = None
+    # for stat in template_stack:
+    #     if stat.startswith("++>") and 
+    # pass
 
 if __name__ == "__main__":
     import pdb, cStringIO
@@ -270,7 +348,23 @@ if __name__ == "__main__":
     test_html2 = """
     <aaa> aiheihei </aaa>
     ++> a+b <++
-    <dfd><++ >++++>dfffefef \"sds<++>++>\"<++
+    <dfd><++ >++++>append(\"sds<++>++>\")<++
     <>fdfd<sdsd>>>>>++><++><>+><>+<>
     """
-    preparse(cStringIO.StringIO(test_html2))
+    env = {"a":1, "b":2}
+    t2=HtmlPage(origin=preparse(cStringIO.StringIO(test_html2)), name="test_html2", **env)
+    # t2.render()
+    test3 = """
+    <head>head<head>
+    ++>append("head content here")<++
+    <body>++>provide("body")<++<body>
+    """
+    test4 = """
+    ++>insert("test3", "body")<++
+    holy ++>append("sh"+"it")<++
+    ++>end_insert()<++
+    """
+    t3 = HtmlPage(origin=preparse(cStringIO.StringIO(test3)), name="test3")
+    t4 = HtmlPage(origin=preparse(cStringIO.StringIO(test4)), name="test4")
+    t4.render()
+    pdb.set_trace()
