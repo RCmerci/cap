@@ -1,6 +1,9 @@
-from .. import cap
+#coding:utf-8#
+import sys
+sys.path.append("..")
+from cap import cap
 import pdb
-
+from cap.template.template import Template
 router = cap.Router(r"prefix")
 app = cap.Cap(router)
 cap.app_register(app)
@@ -37,5 +40,13 @@ def aiheihei(*args):
 def root(*args):
     return cap.Response(
         body="<h1>root page</h1>"
+    )
+@cap.root.route(r"/test/template")
+def test_template(*args):
+    pdb.set_trace()
+    html = Template("./test2.html")
+    context = {"env1":"val1", "env2":"val2"}
+    return cap.Response(
+        body=html.render(**context)
     )
 cap.run(8080, "127.0.0.1")

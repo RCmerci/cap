@@ -1,14 +1,14 @@
 #coding:utf-8#
 import re, os, copy
 from cStringIO import StringIO
-
+from ..cap import static_root
 
 class Template(object):
     def __init__(self, path, **env):
-        self._path = path
-        if not os.path.exists(path):
-            raise IOError(path + "not exists")
-        self.htmlfile = open(path, "rb")
+        self._path = os.path.join(static_root, path)
+        if not os.path.exists(self._path):
+            raise IOError(self._path + " not exists")
+        self.htmlfile = open(self._path, "rb")
         self.env = env
     def render(self, **kwargs):
         if not hasattr(self, "htmlpage_cache"):
@@ -259,6 +259,7 @@ class HtmlPage(object):
         """
         assert(string.startswith("insert"))
         def insert(to, part):
+            to = os.path.join(static_root, to)
             if not (HtmlPage.Instances.has_key(to)\
                     or os.path.exists(to)):         #  # not in HtmlPage.Instancesor this file not exists
                 raise RuntimeError("not exists:" + to)
