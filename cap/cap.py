@@ -63,11 +63,6 @@ class Cap(object):
         ## return corresponding `function` and `matched group`
         return self.router.search(str(path), method)
 
-    # def _consume_prefix(self, url):
-    #     _url = url.lstrip("/")
-    #     _url = re.sub(self.prefix.strip("/"), "", _url)
-    #     return "/" + _url.lstrip("/")
-
     @property
     def prefix(self):
         return self.router.prefix
@@ -75,9 +70,15 @@ class Cap(object):
     def subapp(self, subcap):
         self.cap_stack.push(subcap)
         ## add `/.*` to match __all__ possible case starting with this prefix.
-        tmp_prefix = "^" + subcap.router.prefix + "(?:/.)*"
-        self.router.add(tmp_prefix, subcap)
+        #### tmp_prefix = "^" + subcap.router.prefix + "(?:/.)*" 《－我忘了 (?:/.)*这么写有什么企图。不是应该(?:/.*)吗，而且为什么加括号呢（也忘了）!!!!
+        # tmp_prefix = "^" + subcap.prefix + "(?:/.*)" ＝ ＝这是上一行的10分钟后。。。我想起来了
+        # tmp_prefix = "^" + subcap.prefix + "(?:/.)*" # `(?:/.)*` 这么写的原因是： 1.  /prefix/others/.. 这样的URL应该被匹配
+        self.router.app_add(subcap.prefix, subcap)          # 2. /prefix 这样的URL也应该被匹配到。（因为一个capapp里可能有回调对应的url是“/”）
+        pass                                         # 然而 ＝ ＝， 又过了10分钟，想了一下，prefix的格式化已经移到Router.app_add里去了。
 
+    def __str__(self):
+        return "Cap instance, prefix:%s" % self.prefix
+    __repr__ = __str__
 class Router(object):
     method_list = ["get", "post", "head", "other"]
     router_instances = []
@@ -92,10 +93,23 @@ class Router(object):
         self.head = []
         self.other = [] ### other http `method`s
 
-    # def _fix_prefix(self, prefix):
-    #     return "/" + prefix.replace("\\", "\\\\").strip("/")
-        
+    def app_add(self, prefix, func, method="any"):
+        """
+        用来添加 cap app
+        """
+        tmp_prefix = "^" + prefix + "(?:/.)*"
+        self._add(tmp_prefix, func, method)
     def add(self, url, func, method="any"):
+        """
+        只用于添加 回调函数， 添加app用楼上的app_add.
+        """
+        _url = "(?:%s)$"%FormatReUrl(url).url
+        self._add(_url, func, method)
+    def _add(self, url, func, method="any"):
+        """
+        区别于 self.add,
+        这个函数只用于内部，并假设 ［url］参数已标准化。
+        """
         method = "fallback" if method=="any" else method
         if not method in self.method_list + ["fallback"]:
             warnings.warn("[method] arg is illegal")
@@ -126,7 +140,7 @@ class Router(object):
         def aux(func):
             ### assume users' input url is raw string.
             _url = "(?:%s)$"%FormatReUrl(url).url 
-            self.add(_url, func, method)
+            self._add(_url, func, method)
             return func
         return aux
 
@@ -155,6 +169,10 @@ class Router(object):
         if cap_res:
             return cap_res    
         raise RuntimeError("no matched url-function for: %s"%request.path)
+
+    def __str__(self):
+        return "Router instance, prefix:%s" % self.prefix
+    __repr__ = __str__
     
 class LocalProperty(object):
     def __init__(self):

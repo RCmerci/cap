@@ -17,7 +17,6 @@ class FormatReUrl(object):
         if _url == "":
             return "/"
         _url = _url.strip("/")
-        # return "/" + re.sub(r"\\\\[AbBdDsSwWZ]","", _url.encode("string-escape"))
         return "/" + _url
 
     def consume_prefix(self, prefix=None):
@@ -25,8 +24,9 @@ class FormatReUrl(object):
             _prefix = self._format_prefix(prefix)
             _count = _prefix.count("/")
             _index = 0
+            _formated_url = self.formated_url + "/"
             for i in range(_count+1):
-                _index = self.formated_url.find("/", _index) + 1
+                _index = _formated_url.find("/", _index) + 1
             _index -= 1
             _prefix_regex = self.formated_url[:_index]
             matched_prefix = re.match(_prefix_regex, _prefix)
@@ -40,7 +40,7 @@ class FormatReUrl(object):
             ### or "/" -> "/"
             index = self.formated_url.find('/', 1)
             if index == -1:
-                return self
+                return FormatReUrl("/")
             return FormatReUrl(self.formated_url[index:])
 
     def _format_prefix(self, prefix):
@@ -90,15 +90,14 @@ class FormatUrl(FormatReUrl):
         else:
             index = self.formated_url.find('/', 1)
             if index == -1:
-                return self
-            return FormatReUrl(self.formated_url[index:])
+                return FormatUrl("/")
+            return FormatUrl(self.formated_url[index:])
 
     def _format_prefix(self, prefix):
         _prefix = prefix.strip(" /")
         if _prefix == "":
             return ""
         _prefix = "/" + _prefix.strip("/")
-        # return re.sub(r"\\\\[AbBdDsSwWZ]","", _prefix.encode("string-escape"))
         return _prefix
 
 class FormatRePrefix(object):
@@ -128,7 +127,7 @@ if __name__ == "__main__":
     c = FormatReUrl(r"/aaa/bb/")
     d = FormatReUrl(r"aaa/bb")
     e = FormatReUrl(r"/.../bb/ccc/")
-    
+    f = FormatReUrl(r"aaa/")
     assert(FormatReUrl(r"").url == r"/")
     assert(FormatReUrl(r"/").url == r"/")
     assert(FormatReUrl(r"/aaa/bb/").url == r"/aaa/bb")
@@ -147,7 +146,9 @@ if __name__ == "__main__":
     assert(d.consume_prefix(r"- -").url == r"/aaa/bb")
     assert(e.consume_prefix(r"/aaa").url == r"/bb/ccc")
     assert(e.consume_prefix(r"/aaa/bb").url == r"/ccc")
-
+    assert(f.consume_prefix().url == r"/")
+    pdb.set_trace()
+    assert(f.consume_prefix("aaa").url == r"/")
     
     aa = FormatUrl("")
     bb = FormatUrl("/")
@@ -156,6 +157,7 @@ if __name__ == "__main__":
     ee = FormatUrl("/.a./bb/ccc/")
     ff = FormatUrl("\\aa/bb/cc-")
     gg = FormatUrl("\a/b/c")
+    hh = FormatUrl("aaa")
     assert(aa.url == "/")
     assert(bb.url == "/")
     assert(cc.url == "/aaa/bb")
@@ -163,6 +165,7 @@ if __name__ == "__main__":
     assert(ee.url == "/.a./bb/ccc")
     assert(ff.url == "/\\aa/bb/cc-")
     assert(gg.url == "/\a/b/c")
+    assert(hh.url == "/aaa")
     
     assert(aa.consume_prefix(r"/...").url == r"/")
     assert(bb.consume_prefix(r"/.").url == r"/")
@@ -177,7 +180,8 @@ if __name__ == "__main__":
     assert(ee.consume_prefix(r"\w\w\w").url == r"/.a./bb/ccc")
     assert(ff.consume_prefix(r"\\aa/bb").url == r"/cc-")
     assert(gg.consume_prefix(r"\a").url == r"/b/c")
-
+    assert(hh.consume_prefix().url == r"/")
+    assert(hh.consume_prefix("aaa").url == r"/")
 
 ###########################################################################
 
