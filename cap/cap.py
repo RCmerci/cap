@@ -559,3 +559,8 @@ def run(port, ip, debug=True):
 
     httpd.serve_forever()
     
+def application(env, start_response):
+    """
+    used by released version.
+    """
+    return cap_stack.router_app(env, start_response)

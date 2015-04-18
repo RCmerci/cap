@@ -1,6 +1,6 @@
 #coding:utf-8#
 import sys
-sys.path.append("..")
+sys.path.append("../..")
 from cap import cap
 import pdb
 from cap.template.template import Template
@@ -30,7 +30,6 @@ def download():
 
 @mainrouter.route(r"/", "post")
 def aiheihei(*args):
-    pdb.set_trace()
     f = cap.request.POST.get("ee", None)
     return cap.Response(
         body="<h1>INdEx</h1><p>args:%s</p><p>GET:%s</p><p>POST:%s</p>"%(str(args), cap.request.GET, cap.request.POST)
@@ -48,4 +47,6 @@ def test_template(*args):
     return cap.Response(
         body=html.render(**context)
     )
-cap.run(8080, "127.0.0.1")
+#cap.run(8080, "127.0.0.1")
+ # def application(a, b):
+ #     return cap.application(a, b)
