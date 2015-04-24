@@ -1,0 +1,61 @@
+* sql的一些基本操作记一下：
+1. 查找就不写了
+2. 插入(insert):
+   * insert tbl_name (val_name1, val_name2) values (val1, val2) , (v3, v4);
+   * insert tbl_name () values (); // 全都用default value来填充
+3. 更新表中记录（不是表的字段）
+   * 更新一条记录的方法：
+     UPDATE tbl_name SET col1 = val1, col2 = val2
+     WHERE XXXXX ;(XXXXX -> 这个记录的匹配条件， 如id＝1)
+   * 批量更新？
+4. 删除表中记录
+   * DELETE FROM tbl_name WHERE xxxxx // xxxxx->匹配条件
+   * DELETE FROM tbl_name WHERE xxxxx ORDER BY xxx LIMIT 1; // 只删排序后的第一个
+
+
+----------------------------------------------------
+
+data model 的类型：
+1. char
+2. int
+3. float
+4. text
+5. datetime
+
+－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－
+
+class BaseField:
+      __init__(verbose, null, blank, default)
+
+
+class CharField(BaseField):
+      __init__(verbose, maxlength, null, blank, default)
+
+class IntField(BaseField):
+      同上
+
+class FloatField...
+
+class TextField...
+
+class DateTimeField:
+      __init__(verbose, null, blank, default, auto_now, auto_flush)
+
+------------
+class MetaModel:
+      __init__(cls, name, base, dict)
+      这个是元类
+      一个model中有几个上述的field,在dict中。
+      要做的事：
+	1. 生成这个表的create的sql代码
+	2. 生成类似 django 里的 ｀objects｀的东西
+	
+class Model:
+      __metaclass__ = MetaModel
+
+       还有一些默认值的指定？
+
+
+
+
+
