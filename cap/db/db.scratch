@@ -41,6 +41,8 @@ class TextField...
 class DateTimeField:
       __init__(verbose, null, blank, default, auto_now, auto_flush)
 
+上面的每一个类（除了base）里， sql_data_type 用来表示 sql 中该类对应数据类型
+
 ------------
 class MetaModel:
       __init__(cls, name, base, dict)
@@ -59,3 +61,16 @@ class Model:
 
 
 
+--------------------------------------------------
+其他：
+在元类里定义的方法貌似就是类的类方法。（一个效果？）
+e.g
+class M(type):
+      def f(*args):
+      	  print args
+
+class C(object):
+      __metaclass__ = M
+
+C.ff() -> ("<class C>", )
+跟加了@classmethod 一个效果对吧？
