@@ -523,6 +523,9 @@ is_debug = True
 static_url = r"/static"
 
 static_root = r"./static/"
+
+local_dic = threading.local()
+
 ######################################
 ######### init #######################
 def _register_static_app():

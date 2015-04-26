@@ -74,3 +74,12 @@ class C(object):
 
 C.ff() -> ("<class C>", )
 跟加了@classmethod 一个效果对吧？
+
+========
+LIMIT 语句：
+可以接受1个或2个参数。
+e.g:
+	LIMIT 2 == LIMIT 0, 2  -> 返回最开始2个
+
+	LIMIT 4, 5 -> 返回 第5-9个, 起始坐标是0不是1.！！！
+	
