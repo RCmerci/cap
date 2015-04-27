@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+import pdb
+
 class BaseField(object):
     specific_arg_with_default = (
         ("verbose", ""),
@@ -30,7 +33,8 @@ class CharField(BaseField):
         ("default", ""),
     )
     sql_data_type = "VERCHAR({max_length})"
-
+    str_like = True             # 表示 CharField 的值的类字符串的。
+    
     def __init__(self, **kwargs):
         super(CharField, self).__init__(**kwargs) # 平常，父类的init貌似总在最后调用，而这里父类的init是用
         pass                                      # 来assgin一些变量，后面要用到。
@@ -50,62 +54,53 @@ class DateTimeField(BaseField):
     pass
 
 
-# def unique_list(l):             # unused
-#     """
-#     example:
-#     l -> ((1,2), (2,3), (1,3))
-#     result -> ((2,3), (1,3))
-#     -------------------------
-#     remove the pairs which has same key , (first val as key , 2nd as value).
-#     reserve the last pair.
-#     """
-#     res = {}
-#     for k, v in l:
-#         res[k] = v
-#     return tuple(res.iteritems())
-    
 class DBError(Exception):
     pass
 
 class MetaModel(type):
-    def __init__(cls, name, bases, dic):
+    def __new__(meta, name, bases, dic):
         sql_create = """
         CREATE TABLE {tbl_name} ({fields})
         """
-        if len(cls.mro()) > 2: # means it is not `Model`(the base model).
+        if not bases[0] is object: # means it is not `Model`(the base model).
             # 合成 sql table 的 create 语句
             # `fields`
             fields = {}
             _pk_flag = False
-            cls._pk = None
-            for fname, v in dic:
+            _pk = None
+            for fname, v in dic.items():
                 if not isinstance(v, BaseField):
                     continue
                 if v.pk and not _pk_flag:
-                    cls._pk = fname
+                    _pk = fname
+                    _pk_flag = True
                 fields.update({fname: v.sql_data_type})
             sql_fields = ", ".join(["%s %s"%(k, v) for k, v in fields.items()])
-            _sql_create = sql_create.format(fields=sql_fields)
+            _sql_create = sql_create.strip().format(
+                tbl_name=name,
+                fields=sql_fields
+            )
             _fields = fields.keys()
-            new_dic = dic.update({                             # new_dic 内容：
+            dic.update({                                        # dic 内容：
                 "_sql_create": _sql_create,                    # 各种field的instance（CharField），
-                "_fields": fields                              # _sql_create: model 的 sql 创建语句
-        })                                                 # _fields : 各个fields的名字
-
-            # set up `Query`
-            qname = None
-            query = None
-            for fname, v in dic:
-                if isinstance(v, Query):
-                    query = v
-                    qname = fname
-                    break
-            # query.meta_fill(**new_dic)
-            query.meta_fill(cls)
+                "_fields": _fields,                              # _sql_create: model 的 sql 创建语句
+                "_pk": _pk,
+            })                                                 # _fields : 各个fields的名字
         else:
-            new_dic = dic
-        super(MetaModel, cls).__init__(name, bases, new_dic)
+            pass
+        return super(MetaModel, meta).__new__(meta, name, bases, dic)
 
+    @staticmethod
+    def find_query_ins(cls):
+        for i in dir(cls):
+            if isinstance(getattr(cls, i), Query):
+                return (i, getattr(cls, i))
+            
+    def __init__(cls, name, bases, dic):
+        if not bases[0] is object:
+            qname, query = MetaModel.find_query_ins(cls)
+            query.meta_fill(cls)
+        super(MetaModel, cls).__init__(name, bases, dic)
 
 # class Model(object):
 #     __metaclass__ = MetaModel
@@ -146,32 +141,35 @@ class Query(object):
         "contain": "{0} LIKE '%{1}%'",
         "startswith": "{0} LIKE '{1}%'",
         "endswith": "{0} LIKE '%{1}'",
-        "gt": "{0} > {1}",
-        "ge": "{0} >= {1}",
-        "lt": "{0} < {1}",
-        "le": "{0} <= {1}",
-        "eq": "{0} = {1}",
-        "ne": "{0} <> {1}",
+        "gt": "{0} > {sl}{1}{sl}",
+        "ge": "{0} >= {sl}{1}{sl}",
+        "lt": "{0} < {sl}{1}{sl}",
+        "le": "{0} <= {sl}{1}{sl}",
+        "eq": "{0} = {sl}{1}{sl}",
+        "ne": "{0} <> {sl}{1}{sl}",
     }
     def __init__(self, **kwargs):
-        self.fields = []
+        #self.fields = []
+        pass
         
     def meta_fill(self, model):
         self.model = model
-        
-    @classmethod
-    def _arg2sql(cls, **kwargs):
+    
+    def _arg2sql(self, **kwargs):
         # combine kwargs into sql according to `kw2sql`
         res = []
         for k, v in kwargs.items():
             ks = k.rsplit("__", 1) # example:  aa__contain -> ks[0]==aa, ks[1]==contain
-            if len(ks) == 2 and ks[1] in cls.kw2sql.keys():
-                res.append(kw2sql[ks[1]].format(ks[0], v))
-            res.append("%s = %s"%(k, v))            # default case: a=b
+            if ks[0] not in self.model._fields:
+                raise DBError("illegal db query")
+            sl = "\"" if getattr(self.model, ks[0]).str_like else ""
+            if len(ks) == 2 and ks[1] in self.kw2sql.keys():
+                res.append(self.kw2sql[ks[1]].format(ks[0], v, sl=sl))
+            res.append(self.kw2sql["eq"].format(ks[0], v, sl=sl))            # default case: a=b
         return " AND ".join(res)
     
-    def get(**kwargs):
-        cond = self.__class__._arg2sql(**kwargs)
+    def get(self, **kwargs):
+        cond = self._arg2sql(**kwargs)
         sql = DBCompiler.Combiner.get(cond)
         raw_res = local_dic.DBexecutor(sql)
         if len(raw_res) > 1:
@@ -182,7 +180,7 @@ class Query(object):
         return LazyQ(local_dic.DBexecutor, method="all", model=self.model)
 
     def filter(self, **kwargs):
-        cond = self.__class__._arg2sql(**kwargs)
+        cond = self._arg2sql(**kwargs)
         return LazyQ(local_dic.DBexecutor, method="filter", cond=cond, model=self.model)
 
 
@@ -201,13 +199,14 @@ class Model(object):
         )
     # class Meta:
     #     abstract = True
+    
+DEBUG = True
 
 class LazyQ(object):
     """
     a lazy object for sql result,
     calculate when it is really needed.
     """
-    DEBUG = True
     if DEBUG == True:
         import sys
         sys.path.append("..")
@@ -233,6 +232,7 @@ class LazyQ(object):
         else:
             sql = combiner(self.model)
         raw_res = self.executor(sql)
+        pdb.set_trace()
         return re_structure(self.model, raw_res)
 
     # magic method followed ...
@@ -369,17 +369,17 @@ class DBCompiler(object):
         return [model.__name__ + "." + fn for fn in model._fields]
     
     class Combiner(object):
-        @classmethod
-        def all(cls, model):
-            return cls.__class__.Select().All(model).From(model).render()
+        @staticmethod
+        def all(model):
+            return DBCompiler.Select().All(model).From(model).render()
 
-        @classmethod
-        def filter(cls, model, cond):
-            return cls.__class__.Select().All(model).From(model).Where(cond).render()
+        @staticmethod
+        def filter(model, cond):
+            return DBCompiler.Select().All(model).From(model).Where(cond).render()
 
-        @classmethod
-        def get(cls, model, cond):
-            return cls.__class__.\
+        @staticmethod
+        def get(model, cond):
+            return DBCompiler.\
                 Select().All(model).\
                 From(model).Where(cond).render() # 和 `filter` 一样， 但get的话，之后要判断是不是只有一个。
                 
@@ -389,8 +389,8 @@ class DBCompiler(object):
 
 class Executor(object):
     import MySQLdb
-    def bind(**kwargs):
-        self.db = MySQLdb.connect(**kwargs)
+    def bind(self, **kwargs):
+        self.db = self.MySQLdb.connect(**kwargs)
         self.cur = self.db.cursor()
 
     def __call__(self, sql):
@@ -405,14 +405,31 @@ def re_structure(modelcls, raw_res):
     if len(raw_res[0]) <> len(modelcls._fields):
         raise DBError(u"database返回的值字段个数与model不相等，这个不应该发生－ －")
     res = []
+    pdb.set_trace()
     for ins in raw_res:
         model_ins = modelcls()
-        for fname in modelcls._fields:
-            setattr(model_ins, fname, )
+        for fname, v in zip(modelcls._fields, ins):
+            setattr(model_ins, fname, v)
         res.append(model_ins)
     return res
-        
-from ..cap import local_dic
+if DEBUG:
+    from cap import local_dic
+else:
+    from ..cap import local_dic
 def db_bind(**kwargs):
     local_dic.DBexecutor = Executor()
     local_dic.DBexecutor.bind(**kwargs)
+
+
+
+
+
+if __name__ == "__main__":
+    class TestModel(Model):
+        field1 = CharField(max_length=22, pk=True)
+        f2 = CharField(max_length=253, verbose="yyy")
+
+    db_bind(host="localhost", user="learnguy", passwd="uefgsigw", db="learn")
+
+    print TestModel.query.all()
+    pdb.set_trace()
