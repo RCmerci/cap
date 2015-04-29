@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 import pdb
+import warnings
+if __name__ == '__main__':
+    DEBUG = True
 
 class BaseField(object):
     specific_arg_with_default = (
@@ -26,6 +29,8 @@ class BaseField(object):
     def __repr__(self):
         raise NotImplementedError("sub class should implement it")
 
+    def validate(self, v):
+        raise NotImplementedError("sub class should implement it")
     
 class CharField(BaseField):
     specific_arg_with_default = (
@@ -43,6 +48,10 @@ class CharField(BaseField):
     def __repr__(self):
         return "<CharField at:{0}, {1}>".format(hex(id(self)), self.sql_data_type)
 
+    def validate(self, v):
+        if isinstance(v, basestring):
+            return True
+        return False
 
 class IntField(BaseField):
     pass
@@ -74,7 +83,10 @@ class MetaModel(type):
                 if v.pk and not _pk_flag:
                     _pk = fname
                     _pk_flag = True
+                dic.update({fname: field_descr(v, fname)}) # descr for fields
+                    
                 fields.update({fname: v.sql_data_type})
+                
             sql_fields = ", ".join(["%s %s"%(k, v) for k, v in fields.items()])
             _sql_create = sql_create.strip().format(
                 tbl_name=name,
@@ -118,6 +130,9 @@ class MetaModel(type):
 #             name=self.__class__.__name__,
 #             pk=getattr(self, str(self.__class__._pk))
 #         )
+
+class NotExistError(Exception):
+    pass
 
 class Query(object):
     """
@@ -170,11 +185,13 @@ class Query(object):
     
     def get(self, **kwargs):
         cond = self._arg2sql(**kwargs)
-        sql = DBCompiler.Combiner.get(cond)
+        sql = DBCompiler.Combiner.get(self.model, cond)
         raw_res = local_dic.DBexecutor(sql)
         if len(raw_res) > 1:
             raise DBError("got more than 1 instance")
-        return re_structure(self.model, raw_res)
+        if len(raw_res) == 0:
+            raise NotExistError()
+        return re_structure(self.model, raw_res)[0]
     
     def all(self):
         return LazyQ(local_dic.DBexecutor, method="all", model=self.model)
@@ -183,11 +200,67 @@ class Query(object):
         cond = self._arg2sql(**kwargs)
         return LazyQ(local_dic.DBexecutor, method="filter", cond=cond, model=self.model)
 
+    def save(self, model_ins):
+        if model_ins.is_update:
+            cond = self._arg2sql(**model_ins.old_kv_dic())
+            new_val_dic = model_ins.new_kv_dic()
+            sql = DBCompiler.Combiner.update(self.model, cond, new_val_dic)
+            local_dic.DBexecutor(sql)
+        else:
+            new_val_dic = model_ins.new_kv_dic()
+            sql = DBCompiler.Combiner.insert(self.model, new_val_dic)
+            local_dic.DBexecutor(sql)
 
+class field_descr(object):
+    def __init__(self, field, name):
+        self._field = field
+        self._name = name
+        
+    def __get__(self, obj, owner):
+        if obj == None:
+            return self._field
+        if hasattr(obj, "_new_"+self._name):
+            res = getattr(obj, "_new_"+self._name)
+        else:
+            res = getattr(obj, "_old_"+self._name)
+        return res
+    
+    def __set__(self, obj, val):
+        if hasattr(obj, "_old_"+self._name):
+            setattr(obj, "_new_"+self._name, val)
+        else:
+            setattr(obj, "_old_"+self._name, val)
+
+    @staticmethod
+    def fresh(descr, obj):
+        if not hasattr(obj, "_old_"+descr._name):
+            raise RuntimeError("can't fresh, no old val `%s`."%descr._name)
+        if not hasattr(obj, "_new_"+descr._name):
+            return
+        setattr(obj, "_old_"+descr._name, getattr(obj, "_new_"+descr._name))
+
+    @staticmethod
+    def old_val(descr, obj):
+        return getattr(obj, "_old_"+descr._name)
+
+    @staticmethod
+    def new_val(descr, obj):
+        if hasattr(obj, "_new_"+descr._name):
+            return getattr(obj, "_new_"+descr._name)
+        else:
+            return getattr(obj, "_old_"+descr._name)
+
+    def __repr__(self):
+        return "<%s>"%self._name
+    
 class Model(object):
     __metaclass__ = MetaModel
     query = Query()
 
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+    
     def __repr__(self):
         if not self.__class__._pk:
             _pk = 'no pk assigned'
@@ -195,12 +268,43 @@ class Model(object):
             _pk = getattr(self, str(self.__class__._pk))
         return "<{name}:{pk}>".format(
             name=self.__class__.__name__,
-            pk=getattr(self, str(self.__class__._pk))
+            pk=_pk
         )
-    # class Meta:
-    #     abstract = True
+
+    @property
+    def is_update(self):
+        if not hasattr(self, "_isupdate"):
+            return False
+        return self._isupdate
+    @is_update.setter
+    def is_update(self, v):
+        self._isupdate = bool(v)
     
-DEBUG = True
+    def save(self):
+        if self.old_kv_dic() == self.new_kv_dic():
+            return
+        self.query.save(self)
+        for k in self._fields:
+            field_descr.fresh(self.__class__.__dict__[k], self)
+        self.is_update = True
+
+    def old_kv_dic(self):
+        """
+        返回 instance 的键值（_fields里的） 字典, (old_val)
+        """
+        res_tuple = []
+        for k in self._fields:
+            res_tuple.append((k, field_descr.old_val(self.__class__.__dict__[k], self)))
+        return dict(res_tuple)
+
+    def new_kv_dic(self):
+        """
+        返回 instance 的键值（_fields里的） 字典, (new_val)
+        """
+        res_tuple = []
+        for k in self._fields:
+            res_tuple.append((k, field_descr.new_val(self.__class__.__dict__[k], self)))
+        return dict(res_tuple)
 
 class LazyQ(object):
     """
@@ -232,13 +336,16 @@ class LazyQ(object):
         else:
             sql = combiner(self.model)
         raw_res = self.executor(sql)
-        pdb.set_trace()
         return re_structure(self.model, raw_res)
 
     # magic method followed ...
     def __iter__(self):
         res = self._execute()
         return iter(res)
+
+    def __len__(self):
+        res = self._execute()
+        return len(res)
     
     def __repr__(self):
         res = self._execute()
@@ -273,6 +380,7 @@ class DBCompiler(object):
             self.sql = [sql_tp.upper()]
         def append(self, sql):
             self.sql.append(sql)
+            return self
         def __getattr__(self, name):
             func = getattr(DBCompiler, name)
             if callable(func):
@@ -280,8 +388,7 @@ class DBCompiler(object):
             raise RuntimeError("no such function in DBCompiler: %s"%name)
         def _wrapfunc(self, func):
             def aux(*args, **kwargs):
-                self.append(func(*args, **kwargs))
-                return self
+                return self.append(func(*args, **kwargs))
             return aux
         def render(self):
             return " ".join(self.sql)
@@ -291,16 +398,16 @@ class DBCompiler(object):
         return cls.SqlObj("select")
 
     @classmethod
-    def Insert(cls):
-        return cls.SqlObj("insert")
+    def Insert(cls, model):
+        return cls.SqlObj("insert").append(model.__name__)
 
     @classmethod
     def Delete(cls):
         return cls.SqlObj("delete")
 
     @classmethod
-    def Update(cls):
-        return cls.SqlObj("update")
+    def Update(cls, model):
+        return cls.SqlObj("update").append(model.__name__)
 
     @classmethod
     def All(cls, model):
@@ -357,7 +464,12 @@ class DBCompiler(object):
     def Set(model, field_val_dic): # update
         res = []
         for k, v in field_val_dic.items():
-            res.append(model.__name__ + k + "=" + str(v))
+            sl = "\"" if isinstance(v, basestring) else ""
+            res.append("{name} = {sl}{val}{sl}".format(
+                name=model.__name__+"."+k,
+                sl=sl,
+                val=str(v)
+            ))
         res = ", ".join(res)
         return "SET {0}".format(res)
 
@@ -383,8 +495,22 @@ class DBCompiler(object):
                 Select().All(model).\
                 From(model).Where(cond).render() # 和 `filter` 一样， 但get的话，之后要判断是不是只有一个。
                 
-        # 现在只实现了 all，get和filter。。其他的之后再加上
+        @staticmethod
+        def update(model, cond, new_val_dic): 
+            return DBCompiler.Update(model).Set(model, new_val_dic).Where(cond).render()
 
+        @staticmethod
+        def insert(model, new_val_dic): # 只插入一条
+            values = []
+            for k in model._fields:
+                if not new_val_dic.has_key(k):
+                    raise DBError("not enough args")
+                values.append(new_val_dic[k])
+                
+            return DBCompiler.Insert(model).\
+                append("(").All(model).append(")")\
+                                      .Values([values])\
+                                      .render()
 
 
 class Executor(object):
@@ -405,13 +531,15 @@ def re_structure(modelcls, raw_res):
     if len(raw_res[0]) <> len(modelcls._fields):
         raise DBError(u"database返回的值字段个数与model不相等，这个不应该发生－ －")
     res = []
-    pdb.set_trace()
     for ins in raw_res:
-        model_ins = modelcls()
-        for fname, v in zip(modelcls._fields, ins):
-            setattr(model_ins, fname, v)
+        # model_ins = modelcls()
+        # for fname, v in zip(modelcls._fields, ins):
+        #     setattr(model_ins, fname, v)
+        model_ins = modelcls(**dict(zip(modelcls._fields, ins)))
+        model_ins.is_update = True # 表示这个instance是从数据取的，save时是更新而不是新增
         res.append(model_ins)
     return res
+
 if DEBUG:
     from cap import local_dic
 else:
@@ -432,4 +560,14 @@ if __name__ == "__main__":
     db_bind(host="localhost", user="learnguy", passwd="uefgsigw", db="learn")
 
     print TestModel.query.all()
+    len1 = len(TestModel.query.all())
+    a = TestModel(field1="test1", f2="test2")
+    a.save()
+    assert(len(TestModel.query.all()) == len1+1)
     pdb.set_trace()
+    a.f2="test2_modify"
+    a.save()
+    assert(len(TestModel.query.all()) == len1+1)
+    
+    pdb.set_trace()
+    
