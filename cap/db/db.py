@@ -4,6 +4,7 @@ import warnings
 if __name__ == '__main__':
     DEBUG = True
 
+    
 class BaseField(object):
     specific_arg_with_default = (
         ("verbose", ""),
@@ -38,7 +39,7 @@ class CharField(BaseField):
         ("default", ""),
     )
     sql_data_type = "VERCHAR({max_length})"
-    str_like = True             # 表示 CharField 的值的类字符串的。
+    str_like = True             # 表示 CharField 的值的类字符串的。(sql 里要加引号)
     
     def __init__(self, **kwargs):
         super(CharField, self).__init__(**kwargs) # 平常，父类的init貌似总在最后调用，而这里父类的init是用
@@ -114,22 +115,6 @@ class MetaModel(type):
             query.meta_fill(cls)
         super(MetaModel, cls).__init__(name, bases, dic)
 
-# class Model(object):
-#     __metaclass__ = MetaModel
-#     query = Query()
-#     def _re_structure(self, **kwargs):
-#         for k, v in kwargs:
-#             setattr(self, k, v)
-
-#     def __repr__(self):
-#         if not self.__class__._pk:
-#             _pk = 'no pk assigned'
-#         else:
-#             _pk = getattr(self, str(self.__class__._pk))
-#         return "<{name}:{pk}>".format(
-#             name=self.__class__.__name__,
-#             pk=getattr(self, str(self.__class__._pk))
-#         )
 
 class NotExistError(Exception):
     pass
@@ -171,17 +156,18 @@ class Query(object):
         self.model = model
     
     def _arg2sql(self, **kwargs):
+        return arg2cond(self.model)(**kwargs)
         # combine kwargs into sql according to `kw2sql`
-        res = []
-        for k, v in kwargs.items():
-            ks = k.rsplit("__", 1) # example:  aa__contain -> ks[0]==aa, ks[1]==contain
-            if ks[0] not in self.model._fields:
-                raise DBError("illegal db query")
-            sl = "\"" if getattr(self.model, ks[0]).str_like else ""
-            if len(ks) == 2 and ks[1] in self.kw2sql.keys():
-                res.append(self.kw2sql[ks[1]].format(ks[0], v, sl=sl))
-            res.append(self.kw2sql["eq"].format(ks[0], v, sl=sl))            # default case: a=b
-        return " AND ".join(res)
+        # res = []
+        # for k, v in kwargs.items():
+        #     ks = k.rsplit("__", 1) # example:  aa__contain -> ks[0]==aa, ks[1]==contain
+        #     if ks[0] not in self.model._fields:
+        #         raise DBError("illegal db query")
+        #     sl = "\"" if getattr(self.model, ks[0]).str_like else ""
+        #     if len(ks) == 2 and ks[1] in self.kw2sql.keys():
+        #         res.append(self.kw2sql[ks[1]].format(ks[0], v, sl=sl))
+        #     res.append(self.kw2sql["eq"].format(ks[0], v, sl=sl))            # default case: a=b
+        # return " AND ".join(res)
     
     def get(self, **kwargs):
         cond = self._arg2sql(**kwargs)
@@ -210,7 +196,33 @@ class Query(object):
             new_val_dic = model_ins.new_kv_dic()
             sql = DBCompiler.Combiner.insert(self.model, new_val_dic)
             local_dic.DBexecutor(sql)
+_kw2sql = {
+    "contain": "{0} LIKE '%{1}%'",
+    "startswith": "{0} LIKE '{1}%'",
+    "endswith": "{0} LIKE '%{1}'",
+    "gt": "{0} > {sl}{1}{sl}",
+    "ge": "{0} >= {sl}{1}{sl}",
+    "lt": "{0} < {sl}{1}{sl}",
+    "le": "{0} <= {sl}{1}{sl}",
+    "eq": "{0} = {sl}{1}{sl}",
+    "ne": "{0} <> {sl}{1}{sl}",
+}
 
+def arg2cond(model):         # convert args to sql WHERE's content(condtion)
+    def aux(**kwargs):
+        res = []
+        for k, v in kwargs.items():
+            ks = k.rsplit("__", 1)
+            if ks[0] not in model._fields:
+                warnings.warn("KeyWarning: {0}, not exist.".format(ks[0]))
+                continue
+            sl = "\"" if getattr(model, ks[0]).str_like else ""
+            if len(ks) == 2 and ks[1] in _kw2sql.keys():
+                res.append(_kw2sql[ks[1]].format(ks[0], v, sl=sl))
+            res.append(_kw2sql["eq"].format(ks[0], v, sl=sl))
+        return " AND ".join(res)
+    return aux
+            
 class field_descr(object):
     def __init__(self, field, name):
         self._field = field
@@ -279,6 +291,15 @@ class Model(object):
     @is_update.setter
     def is_update(self, v):
         self._isupdate = bool(v)
+
+    def get(self, **kwargs):
+        return self.query.get(**kwargs)
+
+    def all(self):
+        return self.query.all()
+
+    def filter(self, **kwargs):
+        return self.query.filter(**kwargs)
     
     def save(self):
         if self.old_kv_dic() == self.new_kv_dic():
@@ -288,6 +309,7 @@ class Model(object):
             field_descr.fresh(self.__class__.__dict__[k], self)
         self.is_update = True
 
+    # --------------------------------------------------------------
     def old_kv_dic(self):
         """
         返回 instance 的键值（_fields里的） 字典, (old_val)
@@ -324,6 +346,7 @@ class LazyQ(object):
             self.init_method = method
             self.init_cond = cond
             self.follow_method = []
+            self.follow_kwargs_cond = [] # 
             self.model = model
         else:
             self.follow_method.append(method)
@@ -340,40 +363,104 @@ class LazyQ(object):
 
     # magic method followed ...
     def __iter__(self):
-        res = self._execute()
+        res = self._exec_all()
         return iter(res)
 
     def __len__(self):
-        res = self._execute()
+        res = self._exec_all()
         return len(res)
     
     def __repr__(self):
-        res = self._execute()
+        res = self._exec_all()
         return str(res)
 
     def __nonzero__(self):
-        res = self._execute()
+        res = self._exec_all()
         return bool(res)
 
     def __contains__(self, item):
-        res = self._execute()
+        res = self._exec_all()
         return item in res
 
     def __getitem__(self, k):
         if not isinstance(k, int):
             raise RuntimeError("LazyQ is only list-like")
-        res = self._execute()
+        res = self._exec_all()
         return res[k]
 
-    # method on LazyQ
-    def get(self):
-        pass
-    def filter(self):
-        pass
-    def all(self):
-        pass
+    # method on LazyQ--------------------------------
+    def get(self, **kwargs):
+        res = self._exec_all()
+        if len(res) == 0:
+            raise NotExistError()
+        if len(res) > 1:
+            raise DBError("got more than 1 instance")
+        return res[0]
+
+    def filter(self, **kwargs):
+        self.follow_method.append("filter")
+        self.follow_kwargs_cond.append(kwargs)
+        return self
+    
+    def all(self):              # just do nothing
+        return self
+
+    # --------------------utils----------------------------
+    def _filter(self, mid_res, **kwargs):
+        fields_cmp = []
+        for k, v in kwargs:
+            ks = k.rsplit("__", 1)
+            cmp_kw = ks[1] if len(ks)==2 else None
+            fields_cmp.append((ks[0], cmp_kw, v))
+        def aux(model_ins):
+            fields = [k for k, cmp_kw, v in fields_cmp]
+            for f in [f for f in model_ins._fields if f in fields]:
+                for k, cmp_kw, cmp_cnt in fields_cmp:
+                    if k == f and\
+                       self._cmp(cmp_kw, cmp_cnt, getattr(model_ins, f)):
+                        break
+                    elif k == f:
+                        return False
+            return True
+        return filter(aux, mid_res)
+
+                        
+    def _cmp(self, kw, cmp_cnt, cmped_cnt):
+        import re
+        if isinstance(cmp_cnt, basestring):
+            if kw == "contain" and re.search(cmp_cnt, cmped_cnt):
+                return True
+            if kw == "startswith" and cmped_cnt.startswith(cmp_cnt):
+                return True
+            if kw == "endswith" and cmped_cnt.endswith(cmp_cnt):
+                return True
+            return False
+        else:
+            if kw == "gt" and cmped_cnt > cmp_cnt:
+                return True
+            if kw == "ge" and cmped_cnt >= cmp_cnt:
+                return True
+            if kw == "lt" and cmped_cnt < cmp_cnt:
+                return True
+            if kw == "le" and cmped_cnt <= cmp_cnt:
+                return True
+            if kw == "eq" and cmped_cnt == cmp_cnt:
+                return True
+            if kw == "ne" and cmped_cnt <> cmp_cnt:
+                return True
+            return False
+        
+    def _exec_all(self):
+        # TODO: 这个方法：得到db那里的结果，然后，把follow_method执行一遍，
+        # 但是每次调用他，follow_method都会执行一遍，应该cache起来
+        dbres = self._execute()
+        mid_res = dbres
+        for method, kwargs in zip(self.follow_method, self.follow_kwargs_cond):
+            mid_res = getattr(self, "_"+method)(mid_res, **kwargs)
+        return mid_res
 
 
+    
 class DBCompiler(object):
     class SqlObj(object):
         def __init__(self, sql_tp): # sql_tp: one of [select, insert, delete, update]
@@ -464,7 +551,7 @@ class DBCompiler(object):
     def Set(model, field_val_dic): # update
         res = []
         for k, v in field_val_dic.items():
-            sl = "\"" if isinstance(v, basestring) else ""
+            sl = "\"" if model.str_like else ""
             res.append("{name} = {sl}{val}{sl}".format(
                 name=model.__name__+"."+k,
                 sl=sl,
@@ -568,6 +655,11 @@ if __name__ == "__main__":
     a.f2="test2_modify"
     a.save()
     assert(len(TestModel.query.all()) == len1+1)
+    import time
+    t = time.time()
+    TestModel(f2=str(t), field1="shit").save()
+    print TestModel.query.all().filter(f2=str(t), field1__contain="shi") 
+
     
     pdb.set_trace()
     
