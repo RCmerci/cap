@@ -219,7 +219,8 @@ def arg2cond(model):         # convert args to sql WHERE's content(condtion)
             sl = "\"" if getattr(model, ks[0]).str_like else ""
             if len(ks) == 2 and ks[1] in _kw2sql.keys():
                 res.append(_kw2sql[ks[1]].format(ks[0], v, sl=sl))
-            res.append(_kw2sql["eq"].format(ks[0], v, sl=sl))
+            else:
+                res.append(_kw2sql["eq"].format(ks[0], v, sl=sl))
         return " AND ".join(res)
     return aux
             
@@ -292,17 +293,18 @@ class Model(object):
     def is_update(self, v):
         self._isupdate = bool(v)
 
-    def get(self, **kwargs):
-        return self.query.get(**kwargs)
-
-    def all(self):
-        return self.query.all()
-
-    def filter(self, **kwargs):
-        return self.query.filter(**kwargs)
+    @classmethod
+    def get(cls, **kwargs):
+        return cls.query.get(**kwargs)
+    @classmethod
+    def all(cls):
+        return cls.query.all()
+    @classmethod
+    def filter(cls, **kwargs):
+        return cls.query.filter(**kwargs)
     
     def save(self):
-        if self.old_kv_dic() == self.new_kv_dic():
+        if (self.old_kv_dic() == self.new_kv_dic()) and self.is_update:
             return
         self.query.save(self)
         for k in self._fields:
@@ -371,9 +373,12 @@ class LazyQ(object):
         return len(res)
     
     def __repr__(self):
+        return "<LazyQ of %s>"%self.model
+
+    def __str__(self):
         res = self._exec_all()
         return str(res)
-
+    
     def __nonzero__(self):
         res = self._exec_all()
         return bool(res)
@@ -408,7 +413,7 @@ class LazyQ(object):
     # --------------------utils----------------------------
     def _filter(self, mid_res, **kwargs):
         fields_cmp = []
-        for k, v in kwargs:
+        for k, v in kwargs.items():
             ks = k.rsplit("__", 1)
             cmp_kw = ks[1] if len(ks)==2 else None
             fields_cmp.append((ks[0], cmp_kw, v))
@@ -427,6 +432,8 @@ class LazyQ(object):
                         
     def _cmp(self, kw, cmp_cnt, cmped_cnt):
         import re
+        if kw == None:
+            return cmp_cnt == cmped_cnt
         if isinstance(cmp_cnt, basestring):
             if kw == "contain" and re.search(cmp_cnt, cmped_cnt):
                 return True
@@ -456,6 +463,7 @@ class LazyQ(object):
         dbres = self._execute()
         mid_res = dbres
         for method, kwargs in zip(self.follow_method, self.follow_kwargs_cond):
+            pdb.set_trace()
             mid_res = getattr(self, "_"+method)(mid_res, **kwargs)
         return mid_res
 
@@ -551,7 +559,7 @@ class DBCompiler(object):
     def Set(model, field_val_dic): # update
         res = []
         for k, v in field_val_dic.items():
-            sl = "\"" if model.str_like else ""
+            sl = "\"" if getattr(model, k).str_like else ""
             res.append("{name} = {sl}{val}{sl}".format(
                 name=model.__name__+"."+k,
                 sl=sl,
@@ -649,6 +657,7 @@ if __name__ == "__main__":
     print TestModel.query.all()
     len1 = len(TestModel.query.all())
     a = TestModel(field1="test1", f2="test2")
+    pdb.set_trace()
     a.save()
     assert(len(TestModel.query.all()) == len1+1)
     pdb.set_trace()
