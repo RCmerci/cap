@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 import pdb
 import warnings
-if __name__ == '__main__':
+if __name__ == '__main__' or 1:
     DEBUG = True
 
+    
     
 class BaseField(object):
     specific_arg_with_default = (
@@ -16,53 +17,137 @@ class BaseField(object):
     )
     def __init__(self, **kwargs):
         mro = [i for i in self.__class__.mro() if i is not object]
+        mro.reverse()
         summary_sawd = {}       # sawd: specific_arg_with_default
         for cls in mro:
             summary_sawd.update(dict(cls.specific_arg_with_default))
         summary_sa = summary_sawd.keys() # sa: specific_arg, not include default values
         for k, v in kwargs.items():
             if k in summary_sa:
-                setattr(self, k, v)
+                setattr(self, "_"+k, v)
         for k in summary_sa:
-            if not hasattr(self, k):
-                setattr(self, k, summary_sawd[k])
+            if not hasattr(self, "_"+k):
+                setattr(self, "_"+k, summary_sawd[k])
                 
     def __repr__(self):
         raise NotImplementedError("sub class should implement it")
 
     def validate(self, v):
         raise NotImplementedError("sub class should implement it")
+
+    @property
+    def has_default(self):
+        return hasattr(self, "_default") and self._default
     
 class CharField(BaseField):
     specific_arg_with_default = (
         ("max_length", 255),
-        ("default", ""),
+        ("default", None),
+        ("null", False)
     )
-    sql_data_type = "VERCHAR({max_length})"
+    sql_data_type = "VARCHAR({max_length}) {null} {default}"
     str_like = True             # 表示 CharField 的值的类字符串的。(sql 里要加引号)
     
     def __init__(self, **kwargs):
-        super(CharField, self).__init__(**kwargs) # 平常，父类的init貌似总在最后调用，而这里父类的init是用
-        pass                                      # 来assgin一些变量，后面要用到。
-        self.sql_data_type = self.sql_data_type.format(max_length=self.max_length)
+        super(CharField, self).__init__(**kwargs)
+        null = "NULL" if self._null else "NOT NULL"
+        default = "DEFAULT \'%s\'"%self._default if None<>self._default else ""
+        self.sql_data_type = self.sql_data_type.format(
+            max_length=self._max_length,
+            null=null,
+            default=default
+        )
         
     def __repr__(self):
         return "<CharField at:{0}, {1}>".format(hex(id(self)), self.sql_data_type)
 
-    def validate(self, v):
+    def validate(self, v):      # unused
         if isinstance(v, basestring):
             return True
         return False
 
 class IntField(BaseField):
-    pass
-class FloatField(BaseField):
-    pass
-class TextField(BaseField):
-    pass
-class DateTimeField(BaseField):
-    pass
+    specific_arg_with_default = (
+        ("null", True),
+        ("auto_increase", False),
+        ("default", None),
+    )
+    sql_data_type = "INT {null} {default} {auto_increase}"
+    str_like = False
+    def __init__(self, **kwargs):
+        super(IntField, self).__init__(**kwargs)
+        null = "NULL" if self._null else "NOT NULL"
+        default = "DEFAULT %s"%self._default if None <> self._default else ""
+        auto_increase = "AUTO_INCREMENT PRIMARY KEY" \
+                        if self._auto_increase else "" # auto_increment 的 key 一定要是 pk.
+        self.sql_data_type = self.sql_data_type.format(
+            null=null,
+            default=default,
+            auto_increase=auto_increase
+        )
+        
+    def __repr__(self):
+        return "<IntField at:{0}, {1}>".format(hex(id(self)), self.sql_data_type)
 
+class FloatField(BaseField):
+    specific_arg_with_default = (
+        ("null", True),
+        ("default", None),
+    )
+    sql_data_type = "FLOAT {null} {default}"
+    str_like = False
+    def __init__(self, **kwargs):
+        super(FloatField, self).__init__(**kwargs)
+        null = "NULL" if self._null else "NOT NULL"
+        default = "DEFAULT %s"%self._default if self._default <> None else ""
+        self.sql_data_type = self.sql_data_type.format(
+            null=null,
+            default=default
+        )
+
+    def __repr__(self):
+        return "<FloatField at:{0}, {1}>".format(hex(id(self)), self.sql_data_type)
+    
+class TextField(BaseField):
+    specific_arg_with_default = (
+        ("null", False),
+        ("default", ""),
+    )
+    sql_data_type = "TEXT {null} {default}"
+    str_like = True
+    def __init__(self, **kwargs):
+        super(TextField, self).__init__(**kwargs)
+        null = "NULL" if self._null else "NOT NULL"
+        default = "" # mysql 文档里说 `TEXT` 没有default的
+        self.sql_data_type = self.sql_data_type.format(
+            null=null,
+            default=default
+        )
+
+    def __repr__(self):
+        return "<TextField at:{0}, {1}>".format(hex(id(self)), self.sql_data_type)
+
+class DateTimeField(BaseField):
+    specific_arg_with_default = (
+        ("null", False),
+        ("auto_now", False),
+        ("auto_update", False),
+        # ("default", "")   貌似 时间的话， 默认值没什意义把？
+    )
+    sql_data_type = "TIMESTAMP {null} {now} {update}"
+    str_like = True
+    def __init__(self, **kwargs):
+        super(DateTimeField, self).__init__(**kwargs)
+        null = "NULL" if self._null else "NOT NULL"
+        now = "DEFAULT CURRENT_TIMESTAMP" if self._auto_now else ""
+        update = "ON UPDATE CURRENT_TIMESTAMP" if self._auto_update else ""
+        self.sql_data_type = self.sql_data_type.format(
+            null=null,
+            now=now,
+            update=update
+        )
+    def __repr__(self):
+        return "<DateTimeField at:{0}, {1}>".format(hex(id(self)), self.sql_data_type)
 
 class DBError(Exception):
     pass
@@ -81,7 +166,7 @@ class MetaModel(type):
             for fname, v in dic.items():
                 if not isinstance(v, BaseField):
                     continue
-                if v.pk and not _pk_flag:
+                if v._pk and (not _pk_flag or (hasattr(v, "_auto_increase") and v._auto_increase)):
                     _pk = fname
                     _pk_flag = True
                 dic.update({fname: field_descr(v, fname)}) # descr for fields
@@ -157,17 +242,6 @@ class Query(object):
     
     def _arg2sql(self, **kwargs):
         return arg2cond(self.model)(**kwargs)
-        # combine kwargs into sql according to `kw2sql`
-        # res = []
-        # for k, v in kwargs.items():
-        #     ks = k.rsplit("__", 1) # example:  aa__contain -> ks[0]==aa, ks[1]==contain
-        #     if ks[0] not in self.model._fields:
-        #         raise DBError("illegal db query")
-        #     sl = "\"" if getattr(self.model, ks[0]).str_like else ""
-        #     if len(ks) == 2 and ks[1] in self.kw2sql.keys():
-        #         res.append(self.kw2sql[ks[1]].format(ks[0], v, sl=sl))
-        #     res.append(self.kw2sql["eq"].format(ks[0], v, sl=sl))            # default case: a=b
-        # return " AND ".join(res)
     
     def get(self, **kwargs):
         cond = self._arg2sql(**kwargs)
@@ -234,8 +308,12 @@ class field_descr(object):
             return self._field
         if hasattr(obj, "_new_"+self._name):
             res = getattr(obj, "_new_"+self._name)
-        else:
+        elif hasattr(obj, "_old_"+self._name):
             res = getattr(obj, "_old_"+self._name)
+        elif hasattr(self._field, "_default"): # 
+            res = self._fields._default
+        else:
+            raise DBError("{name} has no value or default value".format(name=self._name))
         return res
     
     def __set__(self, obj, val):
@@ -253,15 +331,23 @@ class field_descr(object):
         setattr(obj, "_old_"+descr._name, getattr(obj, "_new_"+descr._name))
 
     @staticmethod
-    def old_val(descr, obj):
-        return getattr(obj, "_old_"+descr._name)
+    def old_val(descr, obj):    # descr 就是 这个类的实例
+        try:
+            return getattr(obj, "_old_"+descr._name) \
+                if hasattr(obj, "_old_"+descr._name) else descr._field._default
+        except AttributeError:
+            raise DBError("{name} has no value or default value".format(name=descr._name))
 
     @staticmethod
     def new_val(descr, obj):
         if hasattr(obj, "_new_"+descr._name):
             return getattr(obj, "_new_"+descr._name)
-        else:
+        elif hasattr(obj, "_old_"+descr._name):
             return getattr(obj, "_old_"+descr._name)
+        elif hasattr(descr._field, "_default"):
+            return descr._field._default
+        else:
+            raise DBError("{name} has no value or default value".format(name=descr._name))
 
     def __repr__(self):
         return "<%s>"%self._name
@@ -463,7 +549,6 @@ class LazyQ(object):
         dbres = self._execute()
         mid_res = dbres
         for method, kwargs in zip(self.follow_method, self.follow_kwargs_cond):
-            pdb.set_trace()
             mid_res = getattr(self, "_"+method)(mid_res, **kwargs)
         return mid_res
 
@@ -635,6 +720,11 @@ def re_structure(modelcls, raw_res):
         res.append(model_ins)
     return res
 
+def create_table(model):
+    local_dic.DBexecutor(model._sql_create)
+
+
+
 if DEBUG:
     from cap import local_dic
 else:
@@ -648,27 +738,22 @@ def db_bind(**kwargs):
 
 
 if __name__ == "__main__":
-    class TestModel(Model):
-        field1 = CharField(max_length=22, pk=True)
-        f2 = CharField(max_length=253, verbose="yyy")
-
     db_bind(host="localhost", user="learnguy", passwd="uefgsigw", db="learn")
-
-    print TestModel.query.all()
-    len1 = len(TestModel.query.all())
-    a = TestModel(field1="test1", f2="test2")
     pdb.set_trace()
-    a.save()
-    assert(len(TestModel.query.all()) == len1+1)
-    pdb.set_trace()
-    a.f2="test2_modify"
-    a.save()
-    assert(len(TestModel.query.all()) == len1+1)
-    import time
-    t = time.time()
-    TestModel(f2=str(t), field1="shit").save()
-    print TestModel.query.all().filter(f2=str(t), field1__contain="shi") 
+    class TestModel2(Model):
+        f1 = CharField(max_length=22, pk=True)
+        f2 = CharField(max_length=253, verbose="yyy")
+        f3 = IntField(null=False, auto_increase=True)
+        f4 = IntField(verbose="shit")
+        f5 = FloatField(default=3.2)
+        f6 = TextField()
+        f7 = DateTimeField(auto_now=True)
+        f8 = DateTimeField()
 
+    pdb.set_trace()
+    # create_table(TestModel2)
+    a=TestModel2(f1="1111", f2="2222", f3=3333, f4=4444, f6="6666", f7="2000-11-11 11:11:11", f8="2001-12-22 12:12:12")
+    a.save()
     
     pdb.set_trace()
     
