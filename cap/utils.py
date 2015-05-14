@@ -252,15 +252,41 @@ status_dict = {
 }
 
 
-def calculate_once(func):
-    @functools.wraps(func)
-    def aux(obj, *args, **kwargs):
-        res = func(obj, *args, **kwargs)
-        obj.__dict__[func.__name__] = lambda *args, **kwargs: res
-        return res
-    return aux
-    
+# def calculate_once(func):
+#     _cache = {}
+#     @functools.wraps(func)
+#     def aux(obj, *args, **kwargs):
+#         res = func(obj, *args, **kwargs)
+#         obj.__dict__[func.__name__] = lambda *args, **kwargs: res
+#         return res
+#     return aux
 
+def calculate_once(storage_name_or_func):
+    _storage_name = storage_name_or_func \
+                    if isinstance(storage_name_or_func, basestring) else None
+    def wrapper(func):
+        @functools.wraps(func)
+        def aux(obj, *args, **kwargs):
+            if _storage_name <> None:
+                if hasattr(obj, _storage_name):
+                    return getattr(obj, _storage_name)
+                else:
+                    res = func(obj, *args, **kwargs)
+                    setattr(obj, _storage_name, res)
+                    return res
+            else:
+                res = func(obj, *args, **kwargs)
+                obj.__dict__[func.__name__] = lambda *args, **kwargs: res
+                return res
+        return aux
+    
+    if _storage_name == None:
+        wrapper = wrapper(storage_name_or_func) # aux
+    
+    return wrapper
+
+
+        
 class FileWrapper(object):
     """
     trans [obj] to a `file-like` obj

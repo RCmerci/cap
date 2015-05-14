@@ -1,8 +1,16 @@
 # -*- coding: utf-8 -*-
 import pdb
 import warnings
+import functools
+
 if __name__ == '__main__' or 1:
     DEBUG = True
+if DEBUG == True:
+    import sys
+    sys.path.append("..")
+    from utils import calculate_once
+else:
+    from ..utils import calculate_once
 
     
     
@@ -35,10 +43,42 @@ class BaseField(object):
     def validate(self, v):
         raise NotImplementedError("sub class should implement it")
 
-    @property
     def has_default(self):
-        return hasattr(self, "_default") and self._default
-    
+        # return (hasattr(self, "_default") and self._default <> None) or \
+        #     (hasattr(self, "_auto_now") and self._auto_now) or\
+        #     (hasattr(self, "_auto_increase") and self._auto_increase)
+        return self.default[0]
+
+    @property
+    @calculate_once("$default")
+    def default(self):
+        # return val: (a, b)
+        # a: True -> 有default值, false -> 没有
+        # b: 值，auto_now 之类的 为 None
+        if hasattr(self, "_default") and self._default <> None:
+            return (True, self._default)
+        if hasattr(self, "_auto_now") and self._auto_now:
+            return True, None
+        if hasattr(self, "_auto_increase") and self._auto_increase:
+            return True, None
+        return False, None
+
+class _IDField(BaseField):
+    specific_arg_with_default = (
+        ("auto_increase", True),
+    )
+    sql_data_type = "INT {auto_increase}"
+    str_like = False
+    def __init__(self, **kwargs):
+        super(_IDField, self).__init__(**kwargs)
+        auto_increase = "AUTO_INCREMENT PRIMARY KEY" \
+                        if self._auto_increase else "" # auto_increment 的 key 一定要是 pk.
+        self.sql_data_type = self.sql_data_type.format(
+            auto_increase=auto_increase
+        )
+    def __repr__(self):
+        return "<_IDField at:{0}, {1}>".format(hex(id(self)), self.sql_data_type)
+        
 class CharField(BaseField):
     specific_arg_with_default = (
         ("max_length", 255),
@@ -69,25 +109,32 @@ class CharField(BaseField):
 class IntField(BaseField):
     specific_arg_with_default = (
         ("null", True),
-        ("auto_increase", False),
         ("default", None),
     )
-    sql_data_type = "INT {null} {default} {auto_increase}"
+    sql_data_type = "INT {null} {default}"
     str_like = False
     def __init__(self, **kwargs):
         super(IntField, self).__init__(**kwargs)
         null = "NULL" if self._null else "NOT NULL"
         default = "DEFAULT %s"%self._default if None <> self._default else ""
-        auto_increase = "AUTO_INCREMENT PRIMARY KEY" \
-                        if self._auto_increase else "" # auto_increment 的 key 一定要是 pk.
         self.sql_data_type = self.sql_data_type.format(
             null=null,
             default=default,
-            auto_increase=auto_increase
         )
         
     def __repr__(self):
         return "<IntField at:{0}, {1}>".format(hex(id(self)), self.sql_data_type)
+
+    @classmethod
+    def to_primitive(cls, val):
+        if isinstance(val, (int, long)):
+            return int(val)
+        raise DBError("can't convert to primitive value.")
+
+    @classmethod
+    def signal_callback(self, cls):
+        
+        pass
 
 class FloatField(BaseField):
     specific_arg_with_default = (
@@ -149,26 +196,80 @@ class DateTimeField(BaseField):
     def __repr__(self):
         return "<DateTimeField at:{0}, {1}>".format(hex(id(self)), self.sql_data_type)
 
+class ForeignField(BaseField):
+    specific_arg_with_default = (
+        ("fk", None),
+    )
+    sql_data_type = "INT NOT NULL"
+    str_like = False
+    def __init__(self, **kwargs):
+        super(ForeignField, self).__init__(**kwargs)
+        self.other_definition = partial_format("FOREIGN KEY ({fname}) REFERENCES {fk}(_id)", \
+                                               fk=self._fk.__name__)
+        
+    def __repr__(self):
+        return "<ForeignField at:{0}, {1}>".format(hex(id(self)), self.sql_data_type)
+
+    def descr_set(self, val):
+        if not isinstance(val, (int, long)):
+            return val
+        return self._fk.get(_id=val)
+
+    
+    @classmethod
+    def to_primitive(cls, val):
+        if isinstance(val, Model):
+            return int(val._id)
+        if isinstance(val, (int, long)):
+            return int(val)
+        raise DBError("can't convert to primitive value.")
+
+    def emit(self, field_name, relate_model):
+        self._fk.recv(field_name, relate_model)
+        
+def partial_format(string, *args, **kwargs):
+    return functools.partial(string.format, *args, **kwargs)
+
 class DBError(Exception):
     pass
+
+# class SignalExecutor(object):   
+
+#     def bind_signal_callback(self, f):
+#         self.callback = f
+    
+#     @classmethod
+#     def emit(cls, model):
+#         model.recv(cls)
+
+#     @classmethod
+#     def recv(cls, info):
+#         self.f(info)
 
 class MetaModel(type):
     def __new__(meta, name, bases, dic):
         sql_create = """
-        CREATE TABLE {tbl_name} ({fields})
+        CREATE TABLE {tbl_name} ({fields} {other_definition})
         """
         if not bases[0] is object: # means it is not `Model`(the base model).
-            # 合成 sql table 的 create 语句
-            # `fields`
+            
+            # 每个model加 _id 字段 作为 primary key，auto_increment
+            dic.update({"_id": _IDField()})
+            
+            # 合成 sql table 的 create 语句, primary key, _fields, other_definitions(如foreign key)
             fields = {}
             _pk_flag = False
             _pk = None
+            _others = []
             for fname, v in dic.items():
                 if not isinstance(v, BaseField):
                     continue
-                if v._pk and (not _pk_flag or (hasattr(v, "_auto_increase") and v._auto_increase)):
+                if v._pk and not _pk_flag:
                     _pk = fname
                     _pk_flag = True
+                if isinstance(v, ForeignField) and hasattr(v, "other_definition"):
+                    # 处理 foreignkey
+                        _others.append(v.other_definition(fname=fname))
                 dic.update({fname: field_descr(v, fname)}) # descr for fields
                     
                 fields.update({fname: v.sql_data_type})
@@ -176,7 +277,8 @@ class MetaModel(type):
             sql_fields = ", ".join(["%s %s"%(k, v) for k, v in fields.items()])
             _sql_create = sql_create.strip().format(
                 tbl_name=name,
-                fields=sql_fields
+                fields=sql_fields,
+                other_definition=", " + ", ".join(_others)
             )
             _fields = fields.keys()
             dic.update({                                        # dic 内容：
@@ -184,20 +286,48 @@ class MetaModel(type):
                 "_fields": _fields,                              # _sql_create: model 的 sql 创建语句
                 "_pk": _pk,
             })                                                 # _fields : 各个fields的名字
+
+            # required_fields
+            # required_fields: 初始化一个model的时候需要的field， 也就是没有default的fields
+            required_fields = []
+            for fname, v in dic.items():
+                if not isinstance(v, BaseField):
+                    continue
+                if not v.has_default():
+                    required_fields.append(fname)
+            dic.update({
+                "_required_fields": required_fields,
+            })
         else:
             pass
         return super(MetaModel, meta).__new__(meta, name, bases, dic)
 
     @staticmethod
-    def find_query_ins(cls):
+    def find_query(cls):
         for i in dir(cls):
-            if isinstance(getattr(cls, i), Query):
+            if hasattr(getattr(cls, i), "mro") and (Query in getattr(cls, i).__mro__):
                 return (i, getattr(cls, i))
-            
+
+    @staticmethod
+    def find_foreign_field(cls):
+        res = []
+        for i in dir(cls):
+            if isinstance(getattr(cls, i), ForeignField):
+                res.append((i, getattr(cls, i)))
+        return res
+    
     def __init__(cls, name, bases, dic):
         if not bases[0] is object:
-            qname, query = MetaModel.find_query_ins(cls)
+            # update cls.query
+            qname, query = MetaModel.find_query(cls)
+            query = query()
             query.meta_fill(cls)
+            setattr(cls, qname, query)
+            # foreign_field
+            foreign_fields = MetaModel.find_foreign_field(cls)
+            for field_name, ins in foreign_fields:
+                ins.emit(field_name, cls)
+            
         super(MetaModel, cls).__init__(name, bases, dic)
 
 
@@ -261,15 +391,29 @@ class Query(object):
         return LazyQ(local_dic.DBexecutor, method="filter", cond=cond, model=self.model)
 
     def save(self, model_ins):
+        old_kv_dic_without_None = self._strip_none_val(model_ins.primitive_old_kv_dic())
+        new_kv_dic_without_None = self._strip_none_val(model_ins.primitive_new_kv_dic())
         if model_ins.is_update:
-            cond = self._arg2sql(**model_ins.old_kv_dic())
-            new_val_dic = model_ins.new_kv_dic()
-            sql = DBCompiler.Combiner.update(self.model, cond, new_val_dic)
+            cond = self._arg2sql(**old_kv_dic_without_None)
+            sql = DBCompiler.Combiner.update(self.model, cond, new_kv_dic_without_None)
+            if DEBUG:
+                print sql
             local_dic.DBexecutor(sql)
         else:
-            new_val_dic = model_ins.new_kv_dic()
-            sql = DBCompiler.Combiner.insert(self.model, new_val_dic)
+            sql = DBCompiler.Combiner.insert(self.model, new_kv_dic_without_None)
+            if DEBUG:
+                print sql
             local_dic.DBexecutor(sql)
+
+    @staticmethod
+    def _strip_none_val(dic):
+        res = []
+        for k, v in dic.items():
+            if None == v:
+                continue
+            res.append((k, v))
+        return dict(res)
+        
 _kw2sql = {
     "contain": "{0} LIKE '%{1}%'",
     "startswith": "{0} LIKE '{1}%'",
@@ -310,33 +454,41 @@ class field_descr(object):
             res = getattr(obj, "_new_"+self._name)
         elif hasattr(obj, "_old_"+self._name):
             res = getattr(obj, "_old_"+self._name)
-        elif hasattr(self._field, "_default"): # 
-            res = self._fields._default
+        elif self._field.has_default(): # 
+            res = self._field.default[1]
         else:
             raise DBError("{name} has no value or default value".format(name=self._name))
         return res
     
     def __set__(self, obj, val):
+        if hasattr(self._field, "descr_set"):
+            val = self._field.descr_set(val)
         if hasattr(obj, "_old_"+self._name):
             setattr(obj, "_new_"+self._name, val)
         else:
             setattr(obj, "_old_"+self._name, val)
-
+        return
+    
     @staticmethod
     def fresh(descr, obj):
         if not hasattr(obj, "_old_"+descr._name):
-            raise RuntimeError("can't fresh, no old val `%s`."%descr._name)
+            last_record = obj.last_insert_record()
+            setattr(obj, "_old_"+descr._name, getattr(last_record, descr._name))
+            setattr(obj, "_new_"+descr._name, getattr(last_record, descr._name))
+            return 
         if not hasattr(obj, "_new_"+descr._name):
             return
         setattr(obj, "_old_"+descr._name, getattr(obj, "_new_"+descr._name))
 
     @staticmethod
     def old_val(descr, obj):    # descr 就是 这个类的实例
-        try:
-            return getattr(obj, "_old_"+descr._name) \
-                if hasattr(obj, "_old_"+descr._name) else descr._field._default
-        except AttributeError:
+        if hasattr(obj, "_old_"+descr._name):
+            res = getattr(obj, "_old_"+descr._name)
+        elif descr._field.default[0]:
+            res = descr._field.default[1]
+        else:
             raise DBError("{name} has no value or default value".format(name=descr._name))
+        return res
 
     @staticmethod
     def new_val(descr, obj):
@@ -344,19 +496,40 @@ class field_descr(object):
             return getattr(obj, "_new_"+descr._name)
         elif hasattr(obj, "_old_"+descr._name):
             return getattr(obj, "_old_"+descr._name)
-        elif hasattr(descr._field, "_default"):
-            return descr._field._default
+        elif hasattr(descr._field, "default") and descr._field.default[0]:
+            return descr._field.default[1]
         else:
             raise DBError("{name} has no value or default value".format(name=descr._name))
 
+    @classmethod
+    def primitive_old_val(cls, descr, obj):
+        if hasattr(descr._field, "to_primitive"):
+            return descr._field.to_primitive(cls.old_val(descr, obj))
+        else:
+            return cls.old_val(descr, obj)
+
+    @classmethod
+    def primitive_new_val(cls, descr, obj):
+        if hasattr(descr._field, "to_primitive"):
+            return descr._field.to_primitive(cls.new_val(descr, obj))
+        else:
+            return cls.new_val(descr, obj)
+    
     def __repr__(self):
-        return "<%s>"%self._name
+        return "<field_descr: %s>"%self._name
     
 class Model(object):
     __metaclass__ = MetaModel
-    query = Query()
+    query = Query
 
     def __init__(self, **kwargs):
+        # 判断所给字段是否足够
+        ks = kwargs.keys()
+        for k in self._required_fields:
+            if not k in ks:
+                raise DBError("not enough fields.")
+
+        # 设置字段值
         for k, v in kwargs.items():
             setattr(self, k, v)
     
@@ -390,43 +563,57 @@ class Model(object):
         return cls.query.filter(**kwargs)
     
     def save(self):
-        if (self.old_kv_dic() == self.new_kv_dic()) and self.is_update:
+        if (self.primitive_old_kv_dic() == self.primitive_new_kv_dic()) and self.is_update:
             return
         self.query.save(self)
         for k in self._fields:
             field_descr.fresh(self.__class__.__dict__[k], self)
+        self.clean_last_insert_record()
         self.is_update = True
 
     # --------------------------------------------------------------
-    def old_kv_dic(self):
+    def primitive_old_kv_dic(self):
         """
         返回 instance 的键值（_fields里的） 字典, (old_val)
         """
         res_tuple = []
         for k in self._fields:
-            res_tuple.append((k, field_descr.old_val(self.__class__.__dict__[k], self)))
+            res_tuple.append((k, field_descr.primitive_old_val(self.__class__.__dict__[k], self)))
         return dict(res_tuple)
 
-    def new_kv_dic(self):
+    def primitive_new_kv_dic(self):
         """
         返回 instance 的键值（_fields里的） 字典, (new_val)
         """
         res_tuple = []
         for k in self._fields:
-            res_tuple.append((k, field_descr.new_val(self.__class__.__dict__[k], self)))
+            res_tuple.append((k, field_descr.primitive_new_val(self.__class__.__dict__[k], self)))
         return dict(res_tuple)
+
+    @calculate_once("$$last_insert_record")
+    def last_insert_record(self):
+        model = self.__class__
+        # last_insert_id() is a mysql function.see mysql doc 12.14.
+        sql = DBCompiler.Utils.last_insert_record(model, cond="_id=LAST_INSERT_ID()")
+        return re_structure(model, local_dic.DBexecutor(sql))[0]
+
+    def clean_last_insert_record(self):
+        if hasattr(self, "$$last_insert_record"):
+            delattr(self, "$$last_insert_record")
+
+    # recv info from foreign field
+    @classmethod
+    def recv(cls, field_name, relate_model):
+        def aux(self):
+            return relate_model.filter(**{field_name: self._id})
+            
+        setattr(cls, relate_model.__name__+"_set", aux)
 
 class LazyQ(object):
     """
     a lazy object for sql result,
     calculate when it is really needed.
     """
-    if DEBUG == True:
-        import sys
-        sys.path.append("..")
-        from utils import calculate_once
-    else:
-        from ..utils import calculate_once
     
     def __init__(self, executor, model, method, init=True, cond=""):
         self.executor = executor
@@ -446,6 +633,7 @@ class LazyQ(object):
             sql = combiner(self.model, self.init_cond)
         else:
             sql = combiner(self.model)
+        print sql
         raw_res = self.executor(sql)
         return re_structure(self.model, raw_res)
 
@@ -592,6 +780,11 @@ class DBCompiler(object):
     @classmethod
     def All(cls, model):
         return ", ".join(cls.all_fields(model))
+
+    @staticmethod
+    def Part(l):
+        return ", ".join(l)
+    
     @staticmethod
     def From(model):
         return "FROM " + model.__name__
@@ -682,16 +875,24 @@ class DBCompiler(object):
         @staticmethod
         def insert(model, new_val_dic): # 只插入一条
             values = []
-            for k in model._fields:
-                if not new_val_dic.has_key(k):
-                    raise DBError("not enough args")
-                values.append(new_val_dic[k])
+            keys   = []
+            # for k in model._fields:
+            #     if not new_val_dic.has_key(k):
+            #         raise DBError("not enough args")
+            #     values.append(new_val_dic[k])
+
+            for k, v in new_val_dic.items():
+                keys.append(k)
+                values.append(v)
                 
             return DBCompiler.Insert(model).\
-                append("(").All(model).append(")")\
+                append("(").Part(keys).append(")")\
                                       .Values([values])\
                                       .render()
-
+    class Utils(object):
+        @staticmethod
+        def last_insert_record(model, cond):
+            return DBCompiler.Select().All(model).From(model).Where(cond).render()
 
 class Executor(object):
     import MySQLdb
@@ -721,6 +922,7 @@ def re_structure(modelcls, raw_res):
     return res
 
 def create_table(model):
+    print model._sql_create
     local_dic.DBexecutor(model._sql_create)
 
 
@@ -743,7 +945,7 @@ if __name__ == "__main__":
     class TestModel2(Model):
         f1 = CharField(max_length=22, pk=True)
         f2 = CharField(max_length=253, verbose="yyy")
-        f3 = IntField(null=False, auto_increase=True)
+        f3 = IntField(null=False)
         f4 = IntField(verbose="shit")
         f5 = FloatField(default=3.2)
         f6 = TextField()
@@ -751,9 +953,19 @@ if __name__ == "__main__":
         f8 = DateTimeField()
 
     pdb.set_trace()
+    class TestModel3(Model):
+        f1 = ForeignField(fk=TestModel2)
+        f2 = CharField()
+        
+    pdb.set_trace()
     # create_table(TestModel2)
     a=TestModel2(f1="1111", f2="2222", f3=3333, f4=4444, f6="6666", f7="2000-11-11 11:11:11", f8="2001-12-22 12:12:12")
     a.save()
-    
+
+    b = TestModel3(f1=a, f2="hhh")
+    b.save()
+    c = TestModel3.all()[-1]
+    print c.f1
+    print c.f1.TestModel3_set()
     pdb.set_trace()
     
