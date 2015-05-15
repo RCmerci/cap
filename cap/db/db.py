@@ -2,8 +2,8 @@
 import pdb
 import warnings
 import functools
-
-if __name__ == '__main__' or 1:
+DEBUG = False
+if __name__ == '__main__':
     DEBUG = True
 if DEBUG == True:
     import sys
@@ -60,6 +60,8 @@ class BaseField(object):
         if hasattr(self, "_auto_now") and self._auto_now:
             return True, None
         if hasattr(self, "_auto_increase") and self._auto_increase:
+            return True, None
+        if hasattr(self, "_auto_update") and self._auto_update:
             return True, None
         return False, None
 
@@ -131,10 +133,6 @@ class IntField(BaseField):
             return int(val)
         raise DBError("can't convert to primitive value.")
 
-    @classmethod
-    def signal_callback(self, cls):
-        
-        pass
 
 class FloatField(BaseField):
     specific_arg_with_default = (
@@ -275,10 +273,12 @@ class MetaModel(type):
                 fields.update({fname: v.sql_data_type})
                 
             sql_fields = ", ".join(["%s %s"%(k, v) for k, v in fields.items()])
+            other_definition = ", " + ", ".join(_others)
+            other_definition = other_definition if _others else ""
             _sql_create = sql_create.strip().format(
                 tbl_name=name,
                 fields=sql_fields,
-                other_definition=", " + ", ".join(_others)
+                other_definition=other_definition
             )
             _fields = fields.keys()
             dic.update({                                        # dic 内容：
@@ -828,7 +828,8 @@ class DBCompiler(object):
 
     @staticmethod
     def Values(values_l):       # insert
-        _valuess = ", ".join([str(tuple(values)) for values in values_l])
+        _valuess = ", ".\
+                   join(["(%s)"%str(tuple(values)).strip("(),") for values in values_l])
         return "VALUES {0}".format(
             _valuess
         )
