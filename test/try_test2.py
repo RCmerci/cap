@@ -1,6 +1,6 @@
 #coding:utf-8#
 import sys
-sys.path.append("../..")
+sys.path.append("../")
 from cap import cap
 import pdb
 from cap.template.template import Template
@@ -47,6 +47,7 @@ def test_template(*args):
     return cap.Response(
         body=html.render(**context)
     )
+
 # models
 from cap.db import db
 db.db_bind(host="localhost", user="learnguy", passwd="uefgsigw", db="learn")
@@ -58,7 +59,8 @@ try:
     db.create_table(TestModel_1)
 except Exception:
     pass
-    
+
+
 @cap.root.route(r"db/(\w+)")
 def test_db(*args):
     model_ins = TestModel_1(f1=args[0])
@@ -72,6 +74,6 @@ def test_db_2(*args):
     if not res:
         return cap.Response(body="empty")
     return cap.Response(body=str(res[0].f2))
-#cap.run(8080, "127.0.0.1")
- # def application(a, b):
- #     return cap.application(a, b)
+
+
+cap.run(8081, "107.170.196.218")

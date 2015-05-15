@@ -396,13 +396,13 @@ class Query(object):
         if model_ins.is_update:
             cond = self._arg2sql(**old_kv_dic_without_None)
             sql = DBCompiler.Combiner.update(self.model, cond, new_kv_dic_without_None)
-            if DEBUG:
-                print sql
+            # if DEBUG:
+            #     print sql
             local_dic.DBexecutor(sql)
         else:
             sql = DBCompiler.Combiner.insert(self.model, new_kv_dic_without_None)
-            if DEBUG:
-                print sql
+            # if DEBUG:
+            #     print sql
             local_dic.DBexecutor(sql)
 
     @staticmethod
@@ -633,7 +633,6 @@ class LazyQ(object):
             sql = combiner(self.model, self.init_cond)
         else:
             sql = combiner(self.model)
-        print sql
         raw_res = self.executor(sql)
         return re_structure(self.model, raw_res)
 
@@ -923,7 +922,7 @@ def re_structure(modelcls, raw_res):
     return res
 
 def create_table(model):
-    print model._sql_create
+    # print model._sql_create
     local_dic.DBexecutor(model._sql_create)
 
 

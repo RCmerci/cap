@@ -115,10 +115,9 @@ class Router(object):
             warnings.warn("[method] arg is illegal")
             method = "fallback"
         l = getattr(self, method)
-
         for (ind, (_url, _)) in enumerate(l): # if the same [url] has existed,
             if _url == url:                   # replace it with new [func]
-                l[ind] = func                 # else append (url, func) to [l]
+                l[ind] = (url, func)                 # else append (url, func) to [l]
                 return 
         l.append((url, func))
 

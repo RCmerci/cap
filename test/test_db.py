@@ -37,3 +37,13 @@ assert(len(TestModel2.all())==len2 + 1)
 ins1_1 = TestModel1.all()[-1]
 assert(len(ins1_1.TestModel2_set()) == 1)
 assert(ins1_1.TestModel2_set()[0].f1._id ==  ins1_1._id)
+# -----------------------------------------------------------
+class TestModel3(db.Model):
+    f1 = db.FloatField(default=2.3333)
+    f2 = db.DateTimeField(auto_now=True, auto_update=True)
+
+try:
+    db.create_table(TestModel3)
+except Exception:
+    pass
+
